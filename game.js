@@ -36,7 +36,7 @@ let net=null,conns={},tick=null,wake=null,waking=false;
 let myPid=(()=>{try{let p=sessionStorage.getItem('pid');if(!p){p=gid()+gid();sessionStorage.setItem('pid',p)}return p}catch{return gid()+gid()}})();   // secret seat key (lets you rejoin your seat)
 let myName=store('imp_name')||'',myLang=store('imp_lang')||'en';
 const DEF={lang:'en',cat:'random',hint:'category',wpp:2,clueT:10,discT:120,imps:'auto'};
-let OFF={names:store('imp_names')||[],settings:Object.assign({},DEF,store('imp_set')||{})};
+let OFF={names:store('imp_names')||[],bots:Math.min(8,Math.max(0,+store('imp_bots')||0)),settings:Object.assign({},DEF,store('imp_set')||{})};
 
 /* ---------- game engine (runs on host / offline device) ---------- */
 function newGame(o){return Object.assign({phase:'lobby',players:[],settings:Object.assign({},DEF,{lang:myLang}),round:null,deadline:0,hostId:null},o)}
@@ -98,6 +98,8 @@ function act(pid,m){
       R.votes[pid]=t;if(R.order.filter(isOn).every(id=>R.votes[id]))tally();break}
     case 'guess':if(G.phase==='guess'&&pid===R.guesser)resolveGuess(R.opts[m.i]===R.wi);break;
     case 'call':if(p)p.inCall=!!m.on;break;
+    case 'addbot':if(host&&G.phase==='lobby'&&G.players.filter(p=>p.bot).length<8&&G.players.filter(p=>p.connected).length<(G.pub?12:60))addBot();break;
+    case 'rmbot':if(host&&G.phase==='lobby')G.players=G.players.filter(p=>!(p.bot&&p.id===m.id));break;
     case 'chat':{const c={t:'chat',name:p?p.name:'?',text:String(m.text||'').slice(0,200)};
       for(const id in conns)if(conns[id].open)conns[id].send(c);addChat(c);return}
   }
@@ -107,7 +109,7 @@ function viewFor(pid){
   const S=G.settings,R=G.round,L=WORDS[S.lang]||WORDS.en;
   const v={phase:G.phase,code:G.code,pub:G.pub,offline:!!G.offline,settings:S,you:pid,hostId:G.hostId,
     left:G.deadline?Math.max(0,G.deadline-Date.now()):0,
-    players:G.players.map(p=>({id:p.id,name:p.name,score:p.score,on:p.connected,peer:p.peer,inCall:p.inCall}))};
+    players:G.players.map(p=>({id:p.id,name:p.name,score:p.score,on:p.connected,peer:p.peer,inCall:p.inCall,bot:!!p.bot}))};
   if(R&&G.phase!=='lobby'){
     const imp=R.imps.includes(pid),inR=R.order.includes(pid),done=G.phase==='result',n=R.order.length;
     const r=v.round={k:Math.min(R.imps.length,n-1),nImps:R.imps.length,order:R.order,clues:R.clues,
@@ -117,6 +119,7 @@ function viewFor(pid){
     if((inR&&!imp)||done||(imp&&S.hint!=='none'))r.cat=L.cats[R.ci];
     if(imp){r.mates=R.imps;if(S.hint==='similar')r.hint=L.words[R.ci][R.hi]}
     if(G.phase==='guess'){r.guesser=R.guesser;if(pid===R.guesser)r.opts=R.opts.map(i=>L.words[R.ci][i])}
+    if(R.say)r.say=R.say;   // in person: an AI player's clue being shown on the shared screen
     if(done){r.imps=R.imps;r.votes=R.votes;r.accused=R.accused;r.cnt=R.cnt;r.outcome=R.outcome}
   }
   return v;
@@ -131,7 +134,53 @@ let lastBeat=0,lastCode='';
 function startTick(){clearInterval(tick);tick=setInterval(()=>{
   if(G&&G.deadline&&Date.now()>=G.deadline){onTimeout();sync()}
   if(G&&!G.offline&&Date.now()-lastBeat>=3000){lastBeat=Date.now();hostBeat()}
+  if(G)botTick();
 },250)}
+
+/* ---------- AI players ----------
+   They live on the host device (or the shared phone). Each one is handed only viewFor(its own id): the same
+   screen data a human in that seat gets. So it is never told who the imposter is, or the word if it is one. */
+const BOT_NAMES=['Nova','Pixel','Echo','Bolt','Luna','Chip','Zed','Milo','Kiki','Robo'];
+const isBotId=id=>{const p=G&&G.players.find(p=>p.id===id);return !!(p&&p.bot)};
+const humans=()=>G.round.order.filter(id=>!isBotId(id));   // in person, only the humans take the phone
+function addBot(){
+  const used=new Set(G.players.map(p=>p.name)),nm=BOT_NAMES.map(n=>'🤖 '+n).find(n=>!used.has(n))||'🤖 Bot '+(10+rnd(90));
+  G.players.push({id:gid(),name:nm,score:0,connected:true,bot:true,inCall:false});
+}
+function botTry(f,fallback){try{const v=f();return v==null?fallback:v}catch(e){console.error('AI player error',e);return fallback}}
+function botTick(){
+  const R=G.round;if(!R||typeof BOT==='undefined')return;
+  const now=Date.now(),B=R.bot||(R.bot={}),st=id=>B[id]||(B[id]={});
+  if(G.phase==='clues'){
+    const id=curTurn();if(!isBotId(id))return;const s=st(id);
+    if(s.turn!==R.turn){s.turn=R.turn;s.text=null;s.at=now+1500+rnd(3000)}                 // "thinking"
+    else if(!s.text&&now>=s.at){
+      s.text=String(botTry(()=>BOT.clue(viewFor(id)),'…'));
+      if(G.offline){R.say={id,text:s.text};s.at=now+3200;sync()}                            // in person: show the clue for a moment
+      else act(id,{t:'clue',text:s.text});
+    }else if(s.text&&G.offline&&now>=s.at){R.say=null;act(id,{t:'clue',text:s.text})}
+  }else if(G.phase==='discuss'){
+    if(G.offline)return;
+    for(const p of G.players){if(!p.bot||!R.order.includes(p.id))continue;const s=st(p.id);
+      if(!s.chatAt)s.chatAt=now+3000+rnd(12000);
+      else if(!s.chatted&&now>=s.chatAt){s.chatted=true;                                    // sometimes say who looks suspicious
+        const who=Math.random()<.7?botTry(()=>BOT.suspect(viewFor(p.id)),null):null,q=G.players.find(x=>x.id===who);
+        if(q)act(p.id,{t:'chat',text:'🤔 '+q.name+'?'})}}
+  }else if(G.phase==='vote'){
+    for(const p of G.players){if(!p.bot||!R.order.includes(p.id)||R.votes[p.id])continue;const s=st(p.id);
+      if(!s.voteAt){s.voteAt=now+(G.offline?700+rnd(1500):2000+rnd(7000));continue}
+      if(now<s.voteAt)continue;
+      const k=Math.min(R.imps.length,R.order.length-1),others=R.order.filter(id=>id!==p.id);
+      let t=botTry(()=>BOT.vote(viewFor(p.id)),[]);
+      if(!Array.isArray(t)||t.length!==k||new Set(t).size!==k||t.some(id=>!others.includes(id)))t=shuffle(others.slice()).slice(0,k);   // never get stuck on a bad answer
+      act(p.id,{t:'vote',targets:t});if(G.phase!=='vote')return;
+    }
+  }else if(G.phase==='guess'){
+    const id=R.guesser;if(!isBotId(id))return;const s=st(id);
+    if(!s.guessAt)s.guessAt=now+2500+rnd(3000);
+    else if(now>=s.guessAt){s.guessAt=Infinity;const i=botTry(()=>BOT.guess(viewFor(id)),0);act(id,{t:'guess',i:R.opts[i]===undefined?0:i})}
+  }
+}
 // heartbeat: a closed tab or a sleeping phone does not reliably close the connection, so both sides listen for silence (~15s)
 function hostBeat(){for(const id in conns){const c=conns[id];c.miss=(c.miss||0)+1;if(c.miss>4)hostDrop(c);else if(c.open)c.send({t:'ping'})}}
 function clientBeat(){
@@ -291,14 +340,18 @@ function homeHTML(){
   <button data-a="create">Create a private room</button>
   <div class="row" style="margin-top:8px"><input id="code" maxlength="5" placeholder="Room code" value="${esc(lastCode||room)}" style="text-transform:uppercase"><button class="fix sm" style="padding:12px 18px" data-a="join">Join</button></div>
   <button class="ghost" data-a="quick">Quick play — join a public room</button></div>
-  <div class="card"><h2>Play in person</h2><button class="ghost" data-a="offline">Pass one phone around</button></div>`;
+  <div class="card"><h2>Play in person</h2><button class="ghost" data-a="offline">Pass one phone around</button>
+  <div class="mut" style="margin-top:8px">Not enough people? You can add AI players in any mode.</div></div>`;
 }
 function setupHTML(){
-  return `<div class="card"><h2>Players (${OFF.names.length})</h2>
-  <ul>${OFF.names.map((n,i)=>`<li><span>${esc(n)}</span><button class="sm ghost" data-a="rm" data-i="${i}">✕</button></li>`).join('')||'<li class="mut">Add at least 3 players</li>'}</ul>
-  <form id="addf" class="row" style="margin-top:8px"><input id="pname" maxlength="16" placeholder="Player name" autocomplete="off"><button class="sm fix" style="padding:12px 18px">Add</button></form></div>
+  const total=OFF.names.length+OFF.bots,ok=OFF.names.length>=1&&total>=3;
+  return `<div class="card"><h2>Players (${total})</h2>
+  <ul>${OFF.names.map((n,i)=>`<li><span>${esc(n)}</span><button class="sm ghost" data-a="rm" data-i="${i}">✕</button></li>`).join('')||'<li class="mut">Add the people who are playing</li>'}</ul>
+  <form id="addf" class="row" style="margin-top:8px"><input id="pname" maxlength="16" placeholder="Player name" autocomplete="off"><button class="sm fix" style="padding:12px 18px">Add</button></form>
+  <div class="row" style="margin-top:14px"><span>🤖 AI players</span><button class="sm fix ghost" data-a="botminus"${OFF.bots<1?' disabled':''}>−</button><b class="fix">${OFF.bots}</b><button class="sm fix ghost" data-a="botplus"${OFF.bots>7?' disabled':''}>+</button></div>
+  <div class="mut" style="margin-top:6px">You need 3 or more players in total. AI players give clues, vote and guess on their own.</div></div>
   ${settingsHTML(OFF.settings,true)}
-  <button data-a="offstart"${OFF.names.length<3?' disabled':''}>Start game</button><button class="ghost" data-a="home">Back</button>`;
+  <button data-a="offstart"${ok?'':' disabled'}>${ok?'Start game':'Need at least 3 players'}</button><button class="ghost" data-a="home">Back</button>`;
 }
 function roleCard(r,name){
   if(r.role==='spec')return `<div class="card center mut">Round in progress — you will join the next round.</div>`;
@@ -317,30 +370,34 @@ function gameHTML(){
   const v=V,r=v.round,off=v.offline,S=v.settings,host=off||v.you===v.hostId;
   const name=id=>esc((v.players.find(p=>p.id===id)||{}).name||'?');
   const pass=(id,btn,pre)=>`<div class="card center"><div class="mut">${pre||'Pass the phone to'}</div><div class="big">${name(id)}</div><button data-a="uncover">${btn}</button></div>`;
+  const isBot=id=>!!(v.players.find(p=>p.id===id)||{}).bot,hasBots=v.players.some(p=>p.bot);
   if(v.phase==='lobby'){
-    const n=v.players.filter(p=>p.on).length;
+    const n=v.players.filter(p=>p.on).length,nBots=v.players.filter(p=>p.bot).length;
     return `<div class="card center"><div class="mut">${v.pub?'Public room':'Room code'}</div>${v.pub?'':`<div class="code">${esc(v.code)}</div><button class="ghost" data-a="copy">Copy invite link</button>`}</div>
-    <div class="card"><h2>Players (${n})</h2><ul>${v.players.map(p=>`<li><span>${esc(p.name)}${p.id===v.hostId?'<span class="tag">host</span>':''}${p.id===v.you?'<span class="tag">you</span>':''}${p.on?'':'<span class="tag">offline</span>'}</span><b>${esc(p.score)}</b></li>`).join('')}</ul>
-    <div class="mut">Imposters this round: ${S.imps==='auto'?autoImps(n):esc(S.imps)}</div></div>
+    <div class="card"><h2>Players (${n})</h2><ul>${v.players.map(p=>`<li><span>${esc(p.name)}${p.id===v.hostId?'<span class="tag">host</span>':''}${p.id===v.you?'<span class="tag">you</span>':''}${p.bot?'<span class="tag">AI</span>':''}${p.on?'':'<span class="tag">offline</span>'}</span><span><b>${esc(p.score)}</b>${host&&p.bot?` <button class="sm ghost" data-a="rmbot" data-id="${esc(p.id)}">✕</button>`:''}</span></li>`).join('')}</ul>
+    ${host?`<button class="ghost" data-a="addbot"${nBots>7?' disabled':''}>🤖 Add an AI player</button>`:''}
+    <div class="mut" style="margin-top:8px">Imposters this round: ${S.imps==='auto'?autoImps(n):esc(S.imps)}</div></div>
     ${settingsHTML(S,host)}
     ${host||v.pub?`<button data-a="start"${n<3?' disabled':''}>${n<3?'Need at least 3 players':'Start game'}</button>`:'<div class="card center mut">Waiting for the host to start…</div>'}
     <button class="ghost" data-a="home">Leave room</button>`;
   }
-  const board=off?'':`<div class="card"><h2>Clues</h2><ul>${r.order.map(id=>`<li><span>${name(id)}${id===r.turnId?' 👈':''}</span><span>${(r.clues[id]||[]).map(esc).join(' · ')||'<span class="mut">…</span>'}</span></li>`).join('')}</ul></div>`;
+  const solo=off&&r.order.filter(id=>!isBot(id)).length<2,cover=off&&U.cover&&!solo;   // one human on the phone: nothing to hide from anyone
+  const board=off&&!hasBots?'':`<div class="card"><h2>Clues</h2><ul>${r.order.map(id=>`<li><span>${name(id)}${id===r.turnId?' 👈':''}</span><span>${(r.clues[id]||[]).map(esc).join(' · ')||'<span class="mut">…</span>'}</span></li>`).join('')}</ul></div>`;
   const mine=off?'':roleCard(r,name);
   if(v.phase==='reveal'){
-    if(off)return U.cover?pass(v.you,'Show my role'):roleCard(r,name)+`<button data-a="nextseat">Hide and pass on</button>`;
+    if(off)return cover?pass(v.you,'Show my role'):roleCard(r,name)+`<button data-a="nextseat">${solo?'Start':'Hide and pass on'}</button>`;
     return mine+`<div class="card center"><div class="mut">Clues start in</div><div class="timer" id="tm"></div><div class="mut">${esc(r.nImps)} imposter${r.nImps>1?'s':''} among ${esc(r.order.length)} players</div></div>`;
   }
   if(v.phase==='clues'){
-    const my=off||r.turnId===v.you;
+    const bot=isBot(r.turnId),my=!bot&&(off||r.turnId===v.you),say=r.say&&r.say.id===r.turnId?r.say.text:'';
     return mine+`<div class="card center"><div class="mut">Word ${esc(r.clueNo)} of ${esc(S.wpp)}</div><div class="big">${name(r.turnId)}</div>
-    <div class="mut">${off?'say one clue word out loud':my?'your turn — say or type one clue word':'is giving a clue'}</div><div class="timer" id="tm"></div>
-    ${my?(off?'':`<input id="clue" maxlength="30" placeholder="Your clue word (optional)" autocomplete="off">`)+`<button data-a="clue">Done — next player</button>`:''}</div>`+board;
+    ${say?`<div class="mut">says</div><div class="big ok">${esc(say)}</div>`:`<div class="mut">${bot?'is thinking…':off?'say one clue word out loud':my?'your turn — say or type one clue word':'is giving a clue'}</div><div class="timer" id="tm"></div>`}
+    ${my?(off&&!hasBots?'':`<input id="clue" maxlength="30" placeholder="${hasBots?'Type your clue — AI players cannot hear you':'Your clue word (optional)'}" autocomplete="off">`)+`<button data-a="clue">Done — next player</button>`:''}</div>`+board;
   }
   if(v.phase==='discuss')return mine+`<div class="card center"><h2>Discuss — who is the imposter?</h2><div class="timer" id="tm"></div>${host?'<button data-a="go">Vote now</button>':''}</div>`+board;
   if(v.phase==='vote'){
-    if(off&&U.cover)return pass(v.you,'Vote in secret');
+    if(off&&!v.you)return `<div class="card center"><h2>AI players are voting…</h2><div class="mut">${esc(r.voted.length)} of ${esc(r.order.length)} votes in</div></div>`;
+    if(cover)return pass(v.you,'Vote in secret');
     if(r.role==='spec')return mine+`<div class="card center mut">Players are voting… (${esc(r.voted.length)}/${esc(r.order.length)})</div>`;
     if(r.myVote)return mine+`<div class="card center"><h2>Vote sent</h2><div class="mut">Waiting for the others (${esc(r.voted.length)}/${esc(r.order.length)})</div><div class="timer" id="tm"></div></div>`+board;
     return (off?`<div class="card center"><b>${name(v.you)}</b></div>`:mine)+`<div class="card"><h2>Pick ${esc(r.k)} suspect${r.k>1?'s':''}</h2>
@@ -348,7 +405,7 @@ function gameHTML(){
     <button data-a="vote"${U.sel.length!==r.k?' disabled':''}>Confirm vote</button><div class="timer" id="tm"></div></div>`+board;
   }
   if(v.phase==='guess'){
-    if(off&&U.cover)return pass(r.guesser,'Guess the word','All imposters were caught! Last chance — pass the phone to');
+    if(cover&&!isBot(r.guesser))return pass(r.guesser,'Guess the word','All imposters were caught! Last chance — pass the phone to');
     if(r.opts)return `<div class="card"><h2 class="imp">You were caught!</h2><div class="mut">Guess the secret word to steal the win.</div>${r.opts.map((w,i)=>`<button class="pick" data-a="guess" data-i="${i}">${esc(w)}</button>`).join('')}<div class="timer" id="tm"></div></div>`;
     return `<div class="card center"><h2>All imposters were caught!</h2><div class="mut">${name(r.guesser)} gets one guess at the secret word…</div><div class="timer" id="tm"></div></div>`;
   }
@@ -362,7 +419,12 @@ function gameHTML(){
   ${host||v.pub?`<button data-a="start">Next round</button>${off||!host?'':'<button class="ghost" data-a="lobby">Back to lobby (change settings)</button>'}`:'<div class="card center mut">Waiting for the host…</div>'}
   <button class="ghost" data-a="home">${off?'End game':'Leave room'}</button>`;
 }
-function offSeat(){const R=G.round;if(!R)return null;if(G.phase==='reveal'||G.phase==='vote')return R.order[Math.min(U.i,R.order.length-1)];if(G.phase==='guess')return R.guesser;return null}
+function offSeat(){   // in person: whose private screen is showing right now (AI players never take the phone)
+  const R=G.round;if(!R)return null;
+  if(G.phase==='reveal'||G.phase==='vote')return humans()[U.i]||null;
+  if(G.phase==='guess')return isBotId(R.guesser)?null:R.guesser;
+  return null;
+}
 function render(){
   const keep={},foc=document.activeElement&&document.activeElement.id;
   for(const e of document.querySelectorAll('#main input'))if(e.id)keep[e.id]=e.value;
@@ -380,7 +442,9 @@ function render(){
   if(foc&&keep[foc]!==undefined){const e=document.getElementById(foc);e&&e.focus()}
   const online=mode==='game'&&V&&!V.offline;
   $('#call').hidden=$('#chat').hidden=!online;
+  $('#about').hidden=mode!=='home';   // the "How to play" text only shows on the home screen
   $('#hdr').textContent=online?(V.pub?'Public room':'Room '+V.code):mode==='game'?'In person':'';
+  const qb=$('#quit');qb.hidden=mode!=='game';if(qb.hidden){qb.textContent='Leave';delete qb.dataset.sure}   // a way out in the middle of a round
   keepAwake();
   paintTimer();
 }
@@ -404,15 +468,21 @@ document.body.addEventListener('click',e=>{
     case 'quick':readHome();quick();toast('Finding a public room…');break;
     case 'offline':readHome();OFF.settings.lang=myLang;mode='setup';render();break;
     case 'home':goHome();break;
+    case 'quit':if(b.dataset.sure)goHome();   // two taps, so nobody leaves (or closes the room) by accident
+      else{b.dataset.sure='1';b.textContent='Tap again to leave';setTimeout(()=>{if(b.dataset.sure){delete b.dataset.sure;b.textContent='Leave'}},3000)}break;
     case 'rm':OFF.names.splice(+b.dataset.i,1);store('imp_names',OFF.names);render();break;
     case 'offstart':cleanupNet();G=newGame({offline:true});G.settings=Object.assign({},OFF.settings);
-      G.players=OFF.names.map((n,i)=>({id:'p'+i,name:n,score:0,connected:true}));mode='game';startTick();newRound();sync();break;
+      G.players=OFF.names.map((n,i)=>({id:'p'+i,name:n,score:0,connected:true}));for(let i=0;i<OFF.bots;i++)addBot();
+      mode='game';startTick();newRound();sync();break;
+    case 'botplus':case 'botminus':OFF.bots=Math.min(8,Math.max(0,OFF.bots+(a==='botplus'?1:-1)));store('imp_bots',OFF.bots);render();break;
+    case 'addbot':doAct({t:'addbot'});break;
+    case 'rmbot':doAct({t:'rmbot',id:b.dataset.id});break;
     case 'copy':{const u=location.origin+location.pathname+'?room='+V.code;(navigator.clipboard?navigator.clipboard.writeText(u):Promise.reject()).then(()=>toast('Invite link copied'),()=>prompt('Copy this link',u));break}
     case 'start':case 'lobby':case 'go':doAct({t:a});break;
     case 'uncover':U.cover=false;render();break;
-    case 'nextseat':U.i++;U.cover=true;if(U.i>=G.round.order.length)act(null,{t:'go'});else render();break;
+    case 'nextseat':U.i++;U.cover=true;if(U.i>=humans().length)act(null,{t:'go'});else render();break;
     case 'hide':U.hide=!U.hide;render();break;
-    case 'clue':{const i=$('#clue');const t=i?i.value:'';if(i)i.value='';if(G&&G.offline)act(V.round.turnId,{t:'clue'});else send({t:'clue',text:t});break}
+    case 'clue':{const i=$('#clue');const t=i?i.value:'';if(i)i.value='';if(G&&G.offline){if(!isBotId(V.round.turnId))act(V.round.turnId,{t:'clue',text:t})}else send({t:'clue',text:t});break}
     case 'pick':{const id=b.dataset.id,k=V.round.k;if(U.sel.includes(id))U.sel=U.sel.filter(x=>x!==id);else{if(k===1)U.sel=[];if(U.sel.length<k)U.sel.push(id)}render();break}
     case 'vote':{const t=U.sel.slice(),me=V.you;if(G&&G.offline){U.i++;U.cover=true;U.sel=[];act(me,{t:'vote',targets:t})}else send({t:'vote',targets:t});break}
     case 'guess':doAct({t:'guess',i:+b.dataset.i});break;
