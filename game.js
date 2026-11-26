@@ -36,8 +36,12 @@ let net=null,conns={},tick=null,wake=null,waking=false;
 let myPid=(()=>{try{let p=sessionStorage.getItem('pid');if(!p){p=gid()+gid();sessionStorage.setItem('pid',p)}return p}catch{return gid()+gid()}})();   // secret seat key (lets you rejoin your seat)
 let myName=store('imp_name')||'',myLang=store('imp_lang')||'en';
 let voiceOn=store('imp_voice')!==false,primed=false,spoke={},lastSay='',lastWin='',saying=[];   // AI voices (on unless the player turned them off)
-const DEF={lang:'en',cat:'random',hint:'category',wpp:2,clueT:10,discT:120,imps:'auto'};
-let OFF={names:store('imp_names')||[],bots:Math.min(8,Math.max(0,+store('imp_bots')||0)),settings:Object.assign({},DEF,store('imp_set')||{})};
+// give = what the imposter gets: 'word' a different word (the main rule: everyone gets Lion, the imposter gets Tiger),
+// 'secret' a different word without being told they are the imposter, 'cat' only the category, 'none' nothing at all
+const DEF={lang:'en',cat:'random',give:'word',wpp:2,clueT:10,discT:120,imps:'auto'};
+const hasTwin=S=>S.give==='word'||S.give==='secret';   // does the imposter hold a word of their own?
+const savedSet=Object(store('imp_set')||{});           // only settings that still exist are taken over from an earlier visit
+let OFF={names:store('imp_names')||[],bots:Math.min(8,Math.max(0,+store('imp_bots')||0)),settings:Object.fromEntries(Object.keys(DEF).map(k=>[k,k in savedSet?savedSet[k]:DEF[k]]))};
 
 /* ---------- game engine (runs on host / offline device) ---------- */
 function newGame(o){return Object.assign({phase:'lobby',players:[],settings:Object.assign({},DEF,{lang:myLang}),round:null,deadline:0,hostId:null},o)}
@@ -47,7 +51,9 @@ function newRound(){
   if(G.pub)G.players=G.players.filter(p=>p.connected);   // public rooms forget players who left
   const ps=G.players.filter(p=>p.connected),n=ps.length,S=G.settings;
   if(n<3){toast('Need at least 3 players');return}
-  const ci=S.cat==='random'?rnd(5):+S.cat,wi=rnd(10);let hi;do{hi=rnd(10)}while(hi===wi);
+  const ci=S.cat==='random'?rnd(5):+S.cat,wi=rnd(10);
+  let hi;do{hi=rnd(10)}while(hi===wi);   // the imposter's different word: another word of the same category…
+  if(typeof BOT!=='undefined'){const t=botTry(()=>BOT.near(ci,wi),hi);if(Number.isInteger(t)&&t>=0&&t<10&&t!==wi)hi=t}   // …more often one that has something in common with the secret word
   const k=Math.max(1,Math.min(S.imps==='auto'?autoImps(n):+S.imps,Math.floor((n-1)/2)));
   const ids=shuffle(ps.map(p=>p.id));
   G.round={ci,wi,hi,imps:ids.slice(0,k),order:shuffle(ids.slice()),turn:0,clues:{},votes:{},accused:[],cnt:{}};
@@ -71,7 +77,8 @@ function tally(){
     else p.score+=(R.votes[p.id]||[]).filter(id=>R.imps.includes(id)).length}
   if(R.imps.every(id=>R.accused.includes(id))){
     R.guesser=R.imps.find(isOn)||R.imps[0];
-    R.opts=shuffle([R.wi,...shuffle([0,1,2,3,4,5,6,7,8,9].filter(i=>i!==R.wi)).slice(0,5)]);
+    const own=hasTwin(G.settings)?R.hi:-1;   // the imposter's own word is never one of the answers: they know it is not the secret word
+    R.opts=shuffle([R.wi,...shuffle([0,1,2,3,4,5,6,7,8,9].filter(i=>i!==R.wi&&i!==own)).slice(0,5)]);
     G.phase='guess';G.deadline=G.offline?0:Date.now()+20000;
   }else finish('imp');
 }
@@ -116,15 +123,17 @@ function viewFor(pid){
     players:G.players.map(p=>({id:p.id,name:p.name,score:p.score,on:p.connected,peer:p.peer,inCall:p.inCall,bot:!!p.bot}))};
   if(R&&G.phase!=='lobby'){
     const imp=R.imps.includes(pid),inR=R.order.includes(pid),done=G.phase==='result',n=R.order.length;
+    const twin=hasTwin(S)?L.words[R.ci][R.hi]:null;                    // the imposter's different word
+    const secret=imp&&S.give==='secret'&&G.phase!=='guess'&&!done;     // secret imposter: until they are caught, their screen looks like everyone else's
     const r=v.round={k:Math.min(R.imps.length,n-1),nImps:R.imps.length,order:R.order,clues:R.clues,
       turnId:G.phase==='clues'?curTurn():null,clueNo:Math.min(S.wpp,Math.floor(R.turn/n)+1),
-      voted:Object.keys(R.votes),myVote:R.votes[pid]||null,role:!inR?'spec':imp?'imp':'crew'};
-    if((inR&&!imp)||done)r.word=L.words[R.ci][R.wi];
-    if((inR&&!imp)||done||(imp&&S.hint!=='none'))r.cat=L.cats[R.ci];
-    if(imp){r.mates=R.imps;if(S.hint==='similar')r.hint=L.words[R.ci][R.hi]}
+      voted:Object.keys(R.votes),myVote:R.votes[pid]||null,role:!inR?'spec':imp&&!secret?'imp':'crew'};
+    if((inR&&!imp)||done)r.word=L.words[R.ci][R.wi];else if(secret)r.word=twin;
+    if((inR&&!imp)||done||(imp&&S.give!=='none'))r.cat=L.cats[R.ci];
+    if(imp&&!secret){r.mates=R.imps;if(twin)r.hint=twin}
     if(G.phase==='guess'){r.guesser=R.guesser;if(pid===R.guesser)r.opts=R.opts.map(i=>L.words[R.ci][i])}
     if(R.say)r.say=R.say;   // in person: an AI player's clue being shown on the shared screen
-    if(done){r.imps=R.imps;r.votes=R.votes;r.accused=R.accused;r.cnt=R.cnt;r.outcome=R.outcome;r.marks=R.marks||{};if(S.hint==='similar')r.hintWord=L.words[R.ci][R.hi]}
+    if(done){r.imps=R.imps;r.votes=R.votes;r.accused=R.accused;r.cnt=R.cnt;r.outcome=R.outcome;r.marks=R.marks||{};if(twin)r.hintWord=twin}
   }
   return v;
 }
@@ -216,11 +225,12 @@ function primeVoice(){   // phones only allow speech after a tap, so the first t
   if(primed||!canSpeak)return;primed=true;
   try{const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}catch{}
 }
-function announce(v){   // the referee reads out the result: who won, who the imposter was, and the secret word
+function announce(v){   // the referee reads out the result: who won, who the imposter was, the secret word, and the imposter's own word
   const r=v.round,nm=id=>String((v.players.find(p=>p.id===id)||{}).name||'').replace(/[^\p{L}\p{N} ]/gu,' ').trim();
   const who=r.imps.map(nm).filter(Boolean),many=r.imps.length>1;
   speak((r.outcome==='crew'?'Crew wins!':'Imposters win!')+(who.length?' The imposter'+(many?'s were ':' was ')+who.join(' and ')+'.':'')+' The secret word was','en',4);
   speak(r.word,v.settings.lang,4);
+  if(r.hintWord){speak('The imposter'+(many?'s':'')+' had','en',4);speak(r.hintWord,v.settings.lang,4)}
 }
 function voice(v,first){   // called with every new view: say what an AI player has just said, and read out the result
   const r=v&&v.round,bots=v?v.players.filter(p=>p.bot):[];
@@ -404,7 +414,7 @@ function settingsHTML(S,edit){
   return `<div class="card"><h2>Game settings</h2>
   <label>Word language<select data-s="lang"${d}>${Object.keys(WORDS).map(k=>opt(k,WORDS[k].name,S.lang)).join('')}</select></label>
   <label>Category<select data-s="cat"${d}>${opt('random','Random',S.cat)}${L.cats.map((c,i)=>opt(i,c,S.cat)).join('')}</select></label>
-  <label>Imposter hint<select data-s="hint"${d}>${opt('none','Nothing',S.hint)}${opt('category','Category only',S.hint)}${opt('similar','A similar word + category',S.hint)}</select></label>
+  <label>The imposter gets<select data-s="give"${d}>${opt('word','A different word',S.give)}${opt('secret','A different word, and is not told',S.give)}${opt('cat','No word, only the category',S.give)}${opt('none','No word and no hint',S.give)}</select></label>
   <label>Imposters<select data-s="imps"${d}>${opt('auto','Auto (more players = more imposters)',S.imps)}${[1,2,3,4,5].map(n=>opt(n,n,S.imps)).join('')}</select></label>
   <div class="row"><label>Words each<select data-s="wpp"${d}>${[2,3,4,5].map(n=>opt(n,n,S.wpp)).join('')}</select></label>
   <label>Seconds per word<select data-s="clueT"${d}>${[10,15,20,30].map(n=>opt(n,n+'s',S.clueT)).join('')}</select></label>
@@ -430,7 +440,7 @@ addEventListener('appinstalled',()=>{installEvt=null;paintInstall()});
 
 function homeHTML(){
   const room=new URLSearchParams(location.search).get('room')||'';
-  return `<div class="hero">${LOGO}<p>Everyone gets the same secret word, except the imposters. Give clues, discuss, then vote.</p>
+  return `<div class="hero">${LOGO}<p>Everyone gets the same secret word. The imposter gets a different one. Give clues, discuss, then vote.</p>
   <div class="chips"><span>No sign-up</span><span>12 languages</span><span>Voice &amp; video</span><span>AI players</span></div></div>
   <div class="card"><label class="first">Your name<input id="name" maxlength="16" value="${esc(myName)}" placeholder="Type your name" autocomplete="nickname" enterkeyhint="done"></label>
   <label>Language for words<select id="lang">${Object.keys(WORDS).map(k=>opt(k,WORDS[k].name,myLang)).join('')}</select></label>
@@ -456,12 +466,15 @@ function setupHTML(){
 function roleCard(r,name){
   if(r.role==='spec')return `<div class="card center mut">Round in progress — you will join the next round.</div>`;
   if(U.hide)return `<div class="card center"><button class="sm ghost" data-a="hide">Show my word</button></div>`;
+  const quiet=V.settings.give==='secret';   // secret imposter: every card looks the same, nobody is told who has the different word
   let h='<div class="card center role">';
-  if(r.role==='crew')h+=`<div class="mut">Your secret word</div><div class="big ok">${esc(r.word)}</div>`;
-  else{h+=`<div class="big imp">You are the IMPOSTER</div><div class="mut">You don't know the word. Blend in.</div>`;
-    if(r.hint)h+=`<div style="margin-top:8px">Similar word: <b>${esc(r.hint)}</b></div>`;
+  if(r.role==='crew')h+=`<div class="mut">${quiet?'Your word':'Your secret word'}</div><div class="big ok">${esc(r.word)}</div>`;
+  else{
+    if(r.hint)h+=`<div class="sub imp">You are the IMPOSTER</div><div class="mut">Your word</div><div class="big">${esc(r.hint)}</div><div class="mut">${r.mates.length>1?'Only the imposters have this word':'Everyone else got a different word'}. Blend in.</div>`;
+    else h+=`<div class="big imp">You are the IMPOSTER</div><div class="mut">You don't know the word. Blend in.</div>`;
     if(r.mates.length>1)h+=`<div class="mut">Fellow imposters: ${r.mates.filter(id=>id!==V.you).map(name).join(', ')}</div>`}
   if(r.cat)h+=`<div class="mut">Category: ${esc(r.cat)}</div>`;
+  if(quiet&&r.role==='crew')h+=`<div class="mut" style="margin-top:8px">${r.nImps>1?esc(r.nImps)+' players got a different word and are not told':'One player got a different word and is not told'}. It could be you.</div>`;
   if(!V.offline)h+=`<div style="margin-top:10px"><button class="sm ghost" data-a="hide">Hide</button></div>`;
   return h+'</div>';
 }
@@ -514,7 +527,7 @@ function gameHTML(){
   }
   if(v.phase==='guess'){
     if(cover&&!isBot(r.guesser))return pass(r.guesser,'Guess the word','All imposters were caught! Last chance — pass the phone to');
-    if(r.opts)return `<div class="card"><h2 class="imp">You were caught!</h2><div class="mut">Guess the secret word to steal the win.</div>${r.opts.map((w,i)=>`<button class="pick" data-a="guess" data-i="${i}">${esc(w)}</button>`).join('')}<div class="timer" id="tm"></div></div>`;
+    if(r.opts)return `<div class="card"><h2 class="imp">${S.give==='secret'?'You were the imposter, and you were caught!':'You were caught!'}</h2><div class="mut">${hasTwin(S)?'Guess the word the others got to steal the win.':'Guess the secret word to steal the win.'}</div>${r.opts.map((w,i)=>`<button class="pick" data-a="guess" data-i="${i}">${esc(w)}</button>`).join('')}<div class="timer" id="tm"></div></div>`;
     return `<div class="card center"><h2>All imposters were caught!</h2>${face(r.guesser)}<div class="mut">${name(r.guesser)} gets one guess at the secret word…</div><div class="timer" id="tm"></div></div>`;
   }
   // result: the winner, then the referee's report (the word each player got, every clue checked against the secret word)
@@ -526,10 +539,11 @@ function gameHTML(){
     const inner=`${said?'<span class="mut">said out loud</span>':esc(c)} <i>${SYM[m]}</i>`;
     return host?`<button class="chip ${m}" data-a="mark" data-id="${esc(id)}" data-i="${i}" data-v="${m==='y'||m==='w'?'n':'y'}" title="${TIP[m]} — tap to change">${inner}</button>`:`<span class="chip ${m}" title="${TIP[m]}">${inner}</span>`;
   };
-  const got=id=>r.imps.includes(id)?`<b class="imp">no word</b>${r.hintWord?` · hint: <b>${esc(r.hintWord)}</b>`:''}`:`<b>${esc(r.word)}</b>`;
+  const got=id=>r.imps.includes(id)?`<b class="imp">${r.hintWord?esc(r.hintWord):'no word'}</b>`:`<b>${esc(r.word)}</b>`;
   return `<div class="card center role"><div class="big ${msg[2]}">${msg[0]}</div><div class="mut">${msg[1]}</div>
   <div style="margin-top:12px">Secret word: <b>${esc(r.word)}</b> <span class="mut">(${esc(r.cat)})</span></div>
-  <div>Imposter${r.imps.length>1?'s':''}: <b class="imp">${r.imps.map(name).join(', ')}</b></div></div>
+  <div>Imposter${r.imps.length>1?'s':''}: <b class="imp">${r.imps.map(name).join(', ')}</b></div>
+  ${r.hintWord?`<div>The imposter${r.imps.length>1?'s’':'’s'} word: <b class="imp">${esc(r.hintWord)}</b></div>`:''}</div>
   <div class="card ref"><h2>🧑‍⚖️ Referee</h2><div class="mut">The word each player got, and whether each clue fits the secret word.</div>
   <ul style="margin-top:12px">${r.order.map(id=>`<li><div class="top">${who(id,r.imps.includes(id)?'<span class="tag imp">imposter</span>':'')}<span class="got">got ${got(id)}</span></div>
     <div>${(r.clues[id]||[]).map((c,i)=>chip(id,c,i)).join('')||'<span class="chip u">no clue</span>'}</div>
@@ -628,7 +642,7 @@ document.body.addEventListener('click',e=>{
     case 'hide':U.hide=!U.hide;render();break;
     case 'clue':{const i=$('#clue');const t=i?i.value:'';
       const w=V.round&&(G&&G.offline?(viewFor(V.round.turnId).round||{}).word:V.round.word);   // the one hard rule: the secret word itself is not a clue
-      if(w&&t.trim().toLowerCase()===String(w).toLowerCase()){toast('That is the secret word itself. Give a clue about it instead.');break}
+      if(w&&t.trim().toLowerCase()===String(w).toLowerCase()){toast('That is '+(V.settings.give==='secret'?'your word':'the secret word')+' itself. Give a clue about it instead.');break}
       if(i)i.value='';if(G&&G.offline){if(!isBotId(V.round.turnId))act(V.round.turnId,{t:'clue',text:t})}else send({t:'clue',text:t});break}
     case 'pick':{const id=b.dataset.id,k=V.round.k;if(U.sel.includes(id))U.sel=U.sel.filter(x=>x!==id);else{if(k===1)U.sel=[];if(U.sel.length<k)U.sel.push(id)}render();break}
     case 'vote':{const t=U.sel.slice(),me=V.you;if(G&&G.offline){U.i++;U.cover=true;U.sel=[];act(me,{t:'vote',targets:t})}else send({t:'vote',targets:t});break}

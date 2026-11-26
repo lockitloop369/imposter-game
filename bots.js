@@ -2,7 +2,9 @@
 
    Fair play: every decision in this file is made from ONE argument, the AI player's own "view". That is exactly
    what a human in the same seat gets on their screen. An AI player is never told who the imposter is, and an AI
-   imposter is never told the secret word. It has to work things out from the clues, like everyone else.
+   imposter is never told the secret word: it only gets what a human imposter gets (usually a different word).
+   In a "secret imposter" room it is not even told that it is the imposter. It has to work things out from the
+   clues, like everyone else.
 
    The AI players speak with a fixed list of clue words (below), in the room's word language. */
 
@@ -185,10 +187,24 @@ const BOT=(()=>{
     if(L.weak[c].includes(t))return 'w';
     return t>=1000?'u':'n';
   }
-  // what an imposter is allowed to know: the category (if hints are on) and the similar word (if given)
+  // "Secret imposter" rooms: nobody is told who holds the different word, so an AI player has to notice it by itself,
+  // like a person would. When at least two other players keep giving clues that miss its word, and they outnumber the
+  // players whose clues fit, it concludes that it is the odd one out and starts to bluff.
+  function oddOne(view){
+    const r=view.round,lang=view.settings.lang;
+    if(view.settings.give!=='secret'||r.role!=='crew')return false;
+    const c=conceptOf(r.word,lang);if(c<0)return false;
+    let miss=0,fits=0;
+    for(const id of r.order){if(id===view.you)continue;let y=0,n=0;
+      for(const raw of r.clues[id]||[]){const t=rec(raw,lang);if(t==null)continue;const f=fit(t,c);if(f==='n')n++;else if(f!=='u')y++}
+      if(n>y)miss++;else if(y)fits++}
+    return miss>=2&&miss>fits;
+  }
+  // what an imposter is allowed to know: the category (unless the room gives no hint at all) and its own, different word (if it got one)
   function scope(view){
     const r=view.round,lang=view.settings.lang;let ci=-1,H=-1;
-    if(r.hint){H=conceptOf(r.hint,lang);if(H>=0)ci=Math.floor(H/10)}
+    const mine=r.hint||(r.role==='crew'?r.word:null);   // in a secret room the different word is simply "its word"
+    if(mine){H=conceptOf(mine,lang);if(H>=0)ci=Math.floor(H/10)}
     if(ci<0&&r.cat)ci=words(lang).cats.indexOf(r.cat);
     const all=[];for(let c=0;c<L.size;c++)if((ci<0||Math.floor(c/10)===ci)&&c!==H)all.push(c);
     return {ci,H,all};
@@ -227,7 +243,7 @@ const BOT=(()=>{
     lex();const r=view.round,lang=view.settings.lang,me=view.you,said=new Set(),mine=new Set();
     for(const id of r.order)for(const raw of r.clues[id]||[]){const t=rec(raw,lang);if(t!=null){said.add(t);if(id===me)mine.add(t)}}
     const nth=(r.clues[me]||[]).length;let pool=[],w=()=>1;
-    if(r.role==='crew'){
+    if(r.role==='crew'&&!oddOne(view)){   // it trusts that it has the same word as everyone else
       const c=conceptOf(r.word,lang);
       if(c>=0){
         const loose=[...L.weak[c],...L.generic[Math.floor(c/10)]];
@@ -257,7 +273,7 @@ const BOT=(()=>{
   }
   function vote(view){
     lex();const r=view.round,lang=view.settings.lang;let c=-1;
-    if(r.role==='crew')c=conceptOf(r.word,lang);
+    if(r.role==='crew'&&!oddOne(view))c=conceptOf(r.word,lang);
     else{const sc=scope(view),ev=evidence(view,sc.all),best=sc.all.slice().sort((a,b)=>ev[b]-ev[a])[0];if(best!==undefined&&ev[best]>.8)c=best}
     const sus=suspicion(view,c),skip=new Set([view.you,...(r.mates||[])]);
     return r.order.filter(id=>!skip.has(id)).map(id=>[id,sus[id]+gut(view,id)]).sort((a,b)=>b[1]-a[1]).slice(0,r.k).map(x=>x[0]);
@@ -288,6 +304,15 @@ const BOT=(()=>{
     if(L.weak[c].includes(t)||L.generic[Math.floor(c/10)].includes(t))return 'w';   // true of the whole category, not this word in particular
     return t>=1000?'u':'n';
   }
+  // the imposter's different word (not an AI decision: the game asks for it when a round starts). Any other word of the
+  // category can come up, but one that shares clues with the secret word (Lion and Tiger, Doctor and Nurse) comes up more often.
+  function near(ci,wi){
+    lex();const c=ci*10+wi,A=new Set([...L.strong[c],...L.weak[c]]),others=[];
+    for(let j=0;j<10;j++)if(j!==wi)others.push(j);
+    return pick(others,j=>{const d=ci*10+j,B=[...L.strong[d],...L.weak[d]];let n=B.filter(t=>A.has(t)).length;
+      if(A.has(1000+d)||B.includes(1000+c))n+=2;   // one of them is a clue for the other
+      return 1+Math.min(n,5)});                    // capped, so that no pair becomes a sure thing
+  }
   // used by the tests: are the word lists complete and consistent?
   function check(){
     lex();const out={sizes:{},bad:[]};
@@ -299,5 +324,5 @@ const BOT=(()=>{
     if(und(L.vague))out.bad.push('vague');
     return out;
   }
-  return {clue,vote,guess,suspect,judge,check,TUNE};
+  return {clue,vote,guess,suspect,judge,near,oddOne:v=>(lex(),oddOne(v)),check,TUNE};
 })();

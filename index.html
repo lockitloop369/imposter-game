@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Imposter Game Online — Free Word Party Game With Friends</title>
 <link rel="canonical" href="https://lockitloop369.github.io/imposter-game/">
-<meta name="description" content="Free online Imposter word game with no sign-up. Type a name, create a room, share the code and find the imposter with friends, with voice, video and chat. Play in 12 languages, online, on one phone, or with AI players.">
+<meta name="description" content="Free online Imposter word game with no sign-up. Everyone gets the same secret word and the imposter gets a different one. Give clues and find the imposter with friends, with voice, video and chat. Play in 12 languages, online, on one phone, or with AI players.">
 <meta property="og:title" content="Imposter Game Online — Free Word Party Game With Friends">
 <meta property="og:url" content="https://lockitloop369.github.io/imposter-game/">
-<meta property="og:description" content="Everyone gets the same secret word, except the imposters. Give clues, discuss, vote. Play online with a room code or pass one phone around.">
+<meta property="og:description" content="Everyone gets the same secret word. The imposter gets a different one. Give clues, discuss, vote. Play online with a room code or pass one phone around.">
 <meta property="og:type" content="website">
 <meta property="og:image" content="https://lockitloop369.github.io/imposter-game/icon-512.png">
 <meta name="theme-color" content="#0e0f1a">
@@ -21,6 +21,8 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-180.png">
 <meta http-equiv="Content-Security-Policy" content="script-src 'self' https://unpkg.com; object-src 'none'; base-uri 'self'">
+<!-- tells search engines that this page is a free game (plain data, nothing here runs) -->
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"VideoGame","name":"Imposter — Word Party Game","alternateName":"Imposter Game Online","url":"https://lockitloop369.github.io/imposter-game/","image":"https://lockitloop369.github.io/imposter-game/icon-512.png","description":"A free online word party game for 3 or more players. Everyone gets the same secret word and the imposter gets a different one. Give clues, discuss and vote to find the imposter. Play online with friends, on one phone, or with AI players, with secret words in 12 languages.","genre":["Party game","Word game","Social deduction game"],"gamePlatform":"Web browser","applicationCategory":"Game","operatingSystem":"Any","playMode":"MultiPlayer","numberOfPlayers":{"@type":"QuantitativeValue","minValue":3},"inLanguage":"en","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}</script>
 <style>
 :root{color-scheme:dark;--bg:#0e0f1a;--card:#191c31;--card2:#22264a;--line:#30355c;--txt:#f3f4ff;--mut:#a4a9d0;--acc:#7c5cff;--acc2:#ff5ea8;--red:#ff6b81;--grn:#3ddc97;--yel:#ffd166;--sat:env(safe-area-inset-top,0px);--sab:env(safe-area-inset-bottom,0px)}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -39,6 +41,7 @@ main{padding-top:16px}
 h2{margin:0 0 10px;font-size:19px}
 .mut{color:var(--mut);font-size:14px}
 .big{font-size:36px;font-weight:800;margin:8px 0;line-height:1.15;overflow-wrap:anywhere}
+.sub{font-size:20px;font-weight:800;letter-spacing:.3px;margin:0 0 12px}
 .code{font-size:42px;font-weight:800;letter-spacing:8px;margin:2px 0 4px;padding-left:8px}
 .center{text-align:center}
 button{font:inherit;font-weight:700;color:#fff;background:linear-gradient(135deg,var(--acc),#a650ff 55%,var(--acc2));border:0;border-radius:15px;padding:14px 16px;min-height:52px;cursor:pointer;width:100%;margin-top:10px;box-shadow:0 8px 20px rgba(124,92,255,.32);transition:transform .08s,filter .15s;touch-action:manipulation;-webkit-user-select:none;user-select:none}
@@ -138,15 +141,23 @@ button.chip{width:auto;min-height:0;font-weight:400;box-shadow:none;border-style
   <form id="chatf" class="row"><input id="chatin" maxlength="200" placeholder="Message…" autocomplete="off" enterkeyhint="send"><button class="fix" style="width:auto;margin:0;padding:0 20px">Send</button></form></div></section>
 <section id="about"><div class="card">
   <h2>How to play Imposter</h2>
-  <p>Imposter is a free word party game for 3 or more players. Everyone gets the same secret word, except the imposters, who have to bluff their way through.</p>
+  <p>Imposter is a free word party game for 3 or more players. Everyone gets the same secret word, except the imposter, who gets a different word and has to bluff their way through.</p>
   <ol>
     <li><b>Type your name.</b> There is no login and no account. A name is all you need.</li>
-    <li><b>Get your word.</b> Each player privately sees the secret word. Imposters only learn that they are the imposter, plus a hint if the host allows one.</li>
+    <li><b>Get your word.</b> Each player privately sees a word. Everyone has the same one, except the imposter, who gets a different word of the same kind: everyone gets Lion, for example, and the imposter gets Tiger.</li>
     <li><b>Give clues.</b> Taking turns, everyone says one clue word. Each player gives at least two clues, with 10 seconds per word.</li>
     <li><b>Discuss and vote.</b> Talk it over, then everyone votes on their own phone for who they think the imposter is.</li>
     <li><b>Last chance.</b> If every imposter is caught, one of them gets a single guess at the secret word to steal the win.</li>
     <li><b>The referee decides.</b> The game announces who won, shows the word each player got, and checks every clue against the secret word. The host can correct a check.</li>
   </ol>
+  <h2>What the imposter gets</h2>
+  <p>The host picks one of four rules in the game settings:</p>
+  <ul>
+    <li><b>A different word:</b> the imposter knows they are the imposter and sees their own word. This is the usual way to play.</li>
+    <li><b>A different word, and is not told:</b> every screen looks the same, so nobody knows who the imposter is, not even the imposter.</li>
+    <li><b>No word, only the category.</b></li>
+    <li><b>No word and no hint.</b></li>
+  </ul>
   <h2>Ways to play</h2>
   <ul>
     <li><b>Online with friends:</b> create a private room and share the 5-letter code or the invite link.</li>
@@ -156,6 +167,11 @@ button.chip{width:auto;min-height:0;font-weight:400;box-shadow:none;border-style
     <li><b>As an app:</b> add Imposter to your phone's home screen and it opens full screen, like any other app.</li>
   </ul>
   <p>Online rooms have voice chat, video chat and text chat, and bigger groups get more imposters. Secret words come in English, Chinese (中文), Spanish (Español), Hindi (हिन्दी), Bengali (বাংলা), Telugu (తెలుగు), Tamil (தமிழ்), Marathi (मराठी), Arabic (العربية), French (Français), Portuguese (Português) and Russian (Русский). It runs in the browser, with no download and no sign-up.</p>
+  <h2>Questions</h2>
+  <p><b>Is the Imposter game free?</b> Yes. It is free to play, and you do not need an account.</p>
+  <p><b>How many players do you need?</b> Three or more. If you are short of people, add AI players to fill the seats.</p>
+  <p><b>Can you play on one phone?</b> Yes. Choose "Pass one phone around" and hand the phone from player to player.</p>
+  <p><b>Does the imposter get a word?</b> Yes. The imposter gets a different word from everyone else, so they can give clues without knowing the real one. The host can change this in the game settings.</p>
 </div></section>
 <div id="toast"></div>
 
