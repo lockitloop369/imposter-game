@@ -31,10 +31,11 @@ const genCode=()=>Array.from({length:5},()=>'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[rn
 let mode='home';            // home | setup | game
 let G=null;                 // full game state (only on the host device, or offline)
 let V=null,vAt=0;           // what this device is allowed to see
-let U={i:0,cover:true,sel:[],hide:false},lastPhase='';
+let U={i:0,cover:true,sel:[],hide:false},lastPhase='',lastScreen='';
 let net=null,conns={},tick=null,wake=null,waking=false;
 let myPid=(()=>{try{let p=sessionStorage.getItem('pid');if(!p){p=gid()+gid();sessionStorage.setItem('pid',p)}return p}catch{return gid()+gid()}})();   // secret seat key (lets you rejoin your seat)
 let myName=store('imp_name')||'',myLang=store('imp_lang')||'en';
+let voiceOn=store('imp_voice')!==false,primed=false,spoke={},lastSay='',lastWin='',saying=[];   // AI voices (on unless the player turned them off)
 const DEF={lang:'en',cat:'random',hint:'category',wpp:2,clueT:10,discT:120,imps:'auto'};
 let OFF={names:store('imp_names')||[],bots:Math.min(8,Math.max(0,+store('imp_bots')||0)),settings:Object.assign({},DEF,store('imp_set')||{})};
 
@@ -100,6 +101,9 @@ function act(pid,m){
     case 'call':if(p)p.inCall=!!m.on;break;
     case 'addbot':if(host&&G.phase==='lobby'&&G.players.filter(p=>p.bot).length<8&&G.players.filter(p=>p.connected).length<(G.pub?12:60))addBot();break;
     case 'rmbot':if(host&&G.phase==='lobby')G.players=G.players.filter(p=>!(p.bot&&p.id===m.id));break;
+    case 'mark':{   // after the round, the host can overrule the referee's check of one clue
+      const c=R&&R.clues[m.id],i=+m.i;
+      if(host&&G.phase==='result'&&c&&Number.isInteger(i)&&i>=0&&i<c.length&&(m.v==='y'||m.v==='n')){R.marks=R.marks||{};(R.marks[m.id]=R.marks[m.id]||{})[i]=m.v}break}
     case 'chat':{const c={t:'chat',name:p?p.name:'?',text:String(m.text||'').slice(0,200)};
       for(const id in conns)if(conns[id].open)conns[id].send(c);addChat(c);return}
   }
@@ -120,7 +124,7 @@ function viewFor(pid){
     if(imp){r.mates=R.imps;if(S.hint==='similar')r.hint=L.words[R.ci][R.hi]}
     if(G.phase==='guess'){r.guesser=R.guesser;if(pid===R.guesser)r.opts=R.opts.map(i=>L.words[R.ci][i])}
     if(R.say)r.say=R.say;   // in person: an AI player's clue being shown on the shared screen
-    if(done){r.imps=R.imps;r.votes=R.votes;r.accused=R.accused;r.cnt=R.cnt;r.outcome=R.outcome}
+    if(done){r.imps=R.imps;r.votes=R.votes;r.accused=R.accused;r.cnt=R.cnt;r.outcome=R.outcome;r.marks=R.marks||{};if(S.hint==='similar')r.hintWord=L.words[R.ci][R.hi]}
   }
   return v;
 }
@@ -181,6 +185,56 @@ function botTick(){
     else if(now>=s.guessAt){s.guessAt=Infinity;const i=botTry(()=>BOT.guess(viewFor(id)),0);act(id,{t:'guess',i:R.opts[i]===undefined?0:i})}
   }
 }
+/* ---------- AI voices ----------
+   AI players have no microphone and are not in the call. Instead every device reads their clue words out loud
+   with the browser's own text-to-speech, so it also works in person and for players who are not in the call. */
+const TTS={en:'en-US',zh:'zh-CN',es:'es-ES',hi:'hi-IN',bn:'bn-IN',te:'te-IN',ta:'ta-IN',mr:'mr-IN',ar:'ar-SA',fr:'fr-FR',pt:'pt-BR',ru:'ru-RU'};
+const PITCH=[1,1.3,.8,1.15,.9,1.4,.7,1.2];   // a slightly different voice for each AI player
+const ODD=/^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Good News|Jester|Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox)\b/;   // joke voices on Macs
+const canSpeak=typeof speechSynthesis!=='undefined'&&typeof SpeechSynthesisUtterance!=='undefined';
+if(canSpeak)try{speechSynthesis.getVoices()}catch{}   // start loading the list of voices
+function pickVoice(l){   // -> {lang,voice} for a word language, or null when this device has no voice that can read it
+  const want=TTS[l]||'en-US';let vs=[];try{vs=speechSynthesis.getVoices()}catch{}
+  if(!vs.length)return {lang:want};   // list not loaded yet (common on phones): let the browser choose
+  const norm=v=>String(v.lang).replace('_','-').toLowerCase(),ok=c=>vs.filter(v=>norm(v).startsWith(c)&&!ODD.test(v.name));
+  let c=ok(l),lang=want;if(!c.length&&l==='mr'){c=ok('hi');lang='hi-IN'}   // Marathi and Hindi share a script
+  if(!c.length)return null;
+  // best first: the device's own default voice, then the right country, with the Mac "character" voices last
+  const score=v=>(v.default?0:4)+(norm(v)===lang.toLowerCase()?0:1)+(/^(Eddy|Flo|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley) \(/.test(v.name)?2:0);
+  const v=c.slice().sort((a,b)=>score(a)-score(b))[0];
+  return {lang:String(v.lang).replace('_','-'),voice:v};
+}
+function speak(text,l,i){
+  if(!canSpeak||!voiceOn||!/\p{L}/u.test(text))return;
+  const p=pickVoice(l);if(!p)return;
+  try{const u=new SpeechSynthesisUtterance(text);u.lang=p.lang;if(p.voice)u.voice=p.voice;u.rate=.95;u.pitch=PITCH[(i<0?0:i)%PITCH.length];
+    saying.push(u);if(saying.length>6)saying.shift();   // keep a reference: some browsers drop a voice line that nothing points to
+    speechSynthesis.speak(u)}catch{}
+}
+function hush(){if(canSpeak)try{speechSynthesis.cancel()}catch{}}
+function primeVoice(){   // phones only allow speech after a tap, so the first tap anywhere unlocks it
+  if(primed||!canSpeak)return;primed=true;
+  try{const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}catch{}
+}
+function announce(v){   // the referee reads out the result: who won, who the imposter was, and the secret word
+  const r=v.round,nm=id=>String((v.players.find(p=>p.id===id)||{}).name||'').replace(/[^\p{L}\p{N} ]/gu,' ').trim();
+  const who=r.imps.map(nm).filter(Boolean),many=r.imps.length>1;
+  speak((r.outcome==='crew'?'Crew wins!':'Imposters win!')+(who.length?' The imposter'+(many?'s were ':' was ')+who.join(' and ')+'.':'')+' The secret word was','en',4);
+  speak(r.word,v.settings.lang,4);
+}
+function voice(v,first){   // called with every new view: say what an AI player has just said, and read out the result
+  const r=v&&v.round,bots=v?v.players.filter(p=>p.bot):[];
+  if(r&&v.phase==='result'){const k=r.order.join()+'|'+r.outcome;if(k!==lastWin&&!first)announce(v);lastWin=k}else lastWin='';
+  if(!r||!bots.length){spoke={};lastSay='';return}
+  if(v.offline){   // in person: the clue is on the shared screen for a moment
+    const k=r.say?r.say.id+'|'+r.clueNo+'|'+r.say.text:'';
+    if(k&&k!==lastSay)speak(r.say.text,v.settings.lang,bots.findIndex(p=>p.id===r.say.id));
+    lastSay=k;return;
+  }
+  bots.forEach((p,i)=>{const c=r.clues[p.id]||[],n=c.length;
+    if(n>(spoke[p.id]||0)&&!first)speak(c[n-1],v.settings.lang,i);   // "first": we have just walked in, do not repeat old clues
+    spoke[p.id]=n});
+}
 // heartbeat: a closed tab or a sleeping phone does not reliably close the connection, so both sides listen for silence (~15s)
 function hostBeat(){for(const id in conns){const c=conns[id];c.miss=(c.miss||0)+1;if(c.miss>4)hostDrop(c);else if(c.open)c.send({t:'ping'})}}
 function clientBeat(){
@@ -197,7 +251,7 @@ function cleanupNet(){
   if(net){const n=net;farewell(n);net=null;setTimeout(()=>{try{n.peer.destroy()}catch{}},300)}   // short delay so the goodbye gets out
   conns={};G=null;
 }
-function goHome(){cleanupNet();V=null;mode='home';$('#msgs').innerHTML='';if(wake)wake.release().catch(()=>{});render()}
+function goHome(){cleanupNet();V=null;mode='home';$('#msgs').innerHTML='';spoke={};lastSay='';lastWin='';wasIn={};callErr='';hush();if(wake)wake.release().catch(()=>{});render()}
 function waiting(){mode='wait';render()}
 // stay registered with the signalling server (needed for new players and calls); retry gently if it drops
 function keepSignal(peer){peer.on('disconnected',()=>setTimeout(()=>{try{if(net&&net.peer===peer&&!peer.destroyed)peer.reconnect()}catch{}},2000))}
@@ -277,17 +331,18 @@ function joinRoom(code,o={}){
 }
 function quick(n=1){if(n>5){toast('Public rooms are full, try again soon');goHome();return}joinRoom('PUB-'+myLang+'-'+n,{pub:true,n})}
 function send(m){if(!net)return;if(net.host)act(net.pid,m);else if(net.conn&&net.conn.open)net.conn.send(m)}
-function setView(v){V=v;vAt=Date.now();render();syncCalls()}
+function setView(v){const first=!V;V=v;vAt=Date.now();voice(v,first);callNews(v,first);render();syncCalls()}
 
 /* ---------- voice / video call (browser to browser) ---------- */
-let localStream=null,calls={},blankT=null;
+let localStream=null,calls={},blankT=null,callErr='',wasIn={};
 function wireMedia(peer){peer.on('call',c=>{if(!net||net.peer!==peer||!localStream){c.close();return}c.answer(localStream);wireCall(c)})}
 function wireCall(c){c._t=Date.now();calls[c.peer]=c;c.on('stream',s=>tile(c.peer,s));c.on('close',()=>dropCall(c.peer));c.on('error',()=>dropCall(c.peer))}
 function dropCall(id){const c=calls[id];delete calls[id];try{c&&c.close()}catch{}const t=document.getElementById('t-'+id);t&&t.remove()}
 function tile(id,s,me){
   let t=document.getElementById('t-'+id);
   if(!t){t=document.createElement('div');t.className='tile';t.id='t-'+id;t.innerHTML='<video autoplay playsinline></video><span></span>';$('#tiles').append(t)}
-  const v=t.firstChild;v.srcObject=s;v.muted=!!me;const pl=v.play();pl&&pl.catch(()=>{});labelTiles();
+  const v=t.firstChild;v.srcObject=s;v.muted=!!me;const pl=v.play();labelTiles();
+  pl&&pl.catch(e=>{if(!me&&e&&e.name==='NotAllowedError')$('#call [data-a="hear"]').hidden=false});   // this browser wants a tap before it plays sound
 }
 function labelTiles(){if(!V)return;for(const p of V.players){const t=document.getElementById('t-'+p.peer);if(t)t.lastChild.textContent=p.name+(p.id===V.you?' (you)':'')}}
 function blankTrack(){
@@ -297,11 +352,20 @@ function blankTrack(){
 }
 async function joinCall(video){
   if(!net||localStream)return;
+  const n0=net,md=navigator.mediaDevices,dev=video?'camera or microphone':'microphone';
+  const fail=t=>{callErr=t;callInfo();toast(t)};   // the note stays under the call buttons after the pop-up fades
+  if(!md||!md.getUserMedia)return fail('This browser cannot make calls. Open the game in Chrome or Safari.');
   try{
-    const s=await navigator.mediaDevices.getUserMedia({audio:true,video:video?{width:320,height:240}:false});
+    const s=await md.getUserMedia({audio:true,video:video?{width:320,height:240}:false});
+    if(net!==n0||localStream){s.getTracks().forEach(t=>t.stop());return}   // left the room while the browser was asking for permission
     if(!video)s.addTrack(blankTrack());
-    localStream=s;tile(net.peer.id,s,true);callBtns();send({t:'call',on:true});syncCalls();
-  }catch(e){toast('Could not use the microphone/camera — allow it in the browser')}
+    callErr='';localStream=s;tile(net.peer.id,s,true);callBtns();send({t:'call',on:true});syncCalls();
+  }catch(e){
+    const n=e&&e.name;
+    fail(n==='NotFoundError'||n==='OverconstrainedError'?'No '+dev+' was found on this device.'+(video?' Try Join voice instead.':'')
+      :n==='NotReadableError'?'The '+dev+' is busy in another app. Close that app and try again.'
+      :'The '+dev+' is blocked for this site. Allow it in the browser settings (the icon next to the address), then tap Join '+(video?'video':'voice')+' again.');
+  }
 }
 function leaveCall(silent){
   if(!localStream)return;const me=net&&net.peer.id;
@@ -309,7 +373,22 @@ function leaveCall(silent){
   for(const id in calls)dropCall(id);const t=me&&document.getElementById('t-'+me);t&&t.remove();
   callBtns();if(!silent)send({t:'call',on:false});
 }
-function callBtns(){const on=!!localStream;for(const [a,h] of [['voice',on],['video',on],['mute',!on],['leavecall',!on]])$(`#call [data-a="${a}"]`).hidden=h;$('#call [data-a="mute"]').textContent='Mute'}
+function callBtns(){const on=!!localStream;for(const [a,h] of [['voice',on],['video',on],['mute',!on],['leavecall',!on]])$(`#call [data-a="${a}"]`).hidden=h;$('#call [data-a="mute"]').textContent='Mute';if(!on)$('#call [data-a="hear"]').hidden=true;callInfo()}
+function callInfo(){   // one line under the call buttons: who is in the call, and what it takes to hear them
+  const e=$('#callinfo');if(!e)return;if(!V||V.offline){e.textContent='';return}
+  const others=V.players.filter(p=>p.inCall&&p.id!==V.you).map(p=>p.name),people=V.players.some(p=>!p.bot&&p.on&&p.id!==V.you);
+  let t='';
+  if(callErr&&!localStream)t=callErr+(others.length?' '+others.join(', ')+(others.length>1?' are':' is')+' in the call.':'');   // why joining did not work
+  else if(localStream)t+=others.length?'In the call with '+others.join(', ')+'.':people?'You are in the call, but nobody else has joined it yet. Each player has to tap Join voice on their own device.':'You are in the call. No other people are in this room yet.';
+  else t+=others.length?others.join(', ')+(others.length>1?' are':' is')+' in the call. Tap Join voice to talk and listen.':'The call does not start by itself: each player taps Join voice on their own device.';
+  if(V.players.some(p=>p.bot))t+=' AI players are not in the call'+(canSpeak?': this device reads their clues out loud.':'.');
+  e.textContent=t;
+}
+function callNews(v,first){   // tell everyone when somebody joins the call, so they know to join too
+  const now={};for(const p of v.players)if(p.inCall)now[p.id]=1;
+  if(!first&&!v.offline)for(const p of v.players)if(p.inCall&&!wasIn[p.id]&&p.id!==v.you)toast(p.name+' joined the call'+(localStream?'':' — tap Join voice to talk'));
+  wasIn=now;
+}
 function syncCalls(){
   if(!V||!net||!localStream){return}const me=net.peer.id;
   for(const p of V.players)if(p.peer&&p.peer!==me&&p.inCall&&!calls[p.peer]&&me<p.peer){const c=net.peer.call(p.peer,localStream);if(c)wireCall(c)}
@@ -331,58 +410,87 @@ function settingsHTML(S,edit){
   <label>Seconds per word<select data-s="clueT"${d}>${[10,15,20,30].map(n=>opt(n,n+'s',S.clueT)).join('')}</select></label>
   <label>Discussion<select data-s="discT"${d}>${[60,120,180,300].map(n=>opt(n,n/60+' min',S.discT)).join('')}</select></label></div></div>`;
 }
+// app look: a coloured circle with the first letter of a name, and the logo (drawn once in index.html)
+const hue=s=>{let h=7;for(const ch of String(s))h=(h*31+ch.codePointAt(0))%360;return h};
+const avatar=p=>`<span class="av${p.bot?' bot':''}" style="--h:${hue(p.name)}">${esc((String(p.name).match(/[\p{L}\p{N}]/u)||['?'])[0].toUpperCase())}</span>`;
+const LOGO='<svg class="lg" viewBox="0 0 512 512" aria-hidden="true"><use href="#logo"/></svg>';
+const canShare=typeof navigator!=='undefined'&&typeof navigator.share==='function';
+// "Install the app": the browser tells us when it can offer that (Android, desktop Chrome and Edge); iPhones use the Share menu
+let installEvt=null;
+const isApp=()=>(typeof matchMedia==='function'&&matchMedia('(display-mode: standalone)').matches)||(typeof navigator!=='undefined'&&navigator.standalone===true);
+function installHTML(){
+  if(isApp())return '';
+  if(installEvt)return `<div class="card"><h2>Get the app</h2><div class="mut">Put Imposter on your home screen. It opens full screen like any other app, with nothing to sign up for.</div><button class="ghost" data-a="install">📲 Install the app</button></div>`;
+  if(typeof navigator!=='undefined'&&/iphone|ipad|ipod/i.test(navigator.userAgent||''))return `<div class="card"><h2>Get the app</h2><div class="mut">On iPhone or iPad: open this page in Safari, tap the Share button, then “Add to Home Screen”. Imposter then opens full screen like any other app.</div></div>`;
+  return '';
+}
+const paintInstall=()=>{const e=$('#inst');if(e)e.innerHTML=installHTML()};
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvt=e;paintInstall()});
+addEventListener('appinstalled',()=>{installEvt=null;paintInstall()});
+
 function homeHTML(){
   const room=new URLSearchParams(location.search).get('room')||'';
-  return `<div class="card"><h2>Find the imposter</h2><div class="mut">Everyone gets the same secret word — except the imposters. Give clues, discuss, then vote.</div>
-  <label>Your name<input id="name" maxlength="16" value="${esc(myName)}" placeholder="Name"></label>
-  <label>Language for words<select id="lang">${Object.keys(WORDS).map(k=>opt(k,WORDS[k].name,myLang)).join('')}</select></label></div>
+  return `<div class="hero">${LOGO}<p>Everyone gets the same secret word, except the imposters. Give clues, discuss, then vote.</p>
+  <div class="chips"><span>No sign-up</span><span>12 languages</span><span>Voice &amp; video</span><span>AI players</span></div></div>
+  <div class="card"><label class="first">Your name<input id="name" maxlength="16" value="${esc(myName)}" placeholder="Type your name" autocomplete="nickname" enterkeyhint="done"></label>
+  <label>Language for words<select id="lang">${Object.keys(WORDS).map(k=>opt(k,WORDS[k].name,myLang)).join('')}</select></label>
+  <div class="mut" style="margin-top:10px">No login and no account. Your name is all you need.</div></div>
   <div class="card"><h2>Play online</h2>
   <button data-a="create">Create a private room</button>
-  <div class="row" style="margin-top:8px"><input id="code" maxlength="5" placeholder="Room code" value="${esc(lastCode||room)}" style="text-transform:uppercase"><button class="fix sm" style="padding:12px 18px" data-a="join">Join</button></div>
+  <div class="row" style="margin-top:10px"><input id="code" maxlength="5" placeholder="Room code" value="${esc(lastCode||room)}" style="text-transform:uppercase" autocapitalize="characters" autocomplete="off"><button class="fix" style="width:auto;margin:0;padding:0 24px" data-a="join">Join</button></div>
   <button class="ghost" data-a="quick">Quick play — join a public room</button></div>
   <div class="card"><h2>Play in person</h2><button class="ghost" data-a="offline">Pass one phone around</button>
-  <div class="mut" style="margin-top:8px">Not enough people? You can add AI players in any mode.</div></div>`;
+  <div class="mut" style="margin-top:10px">Not enough people? You can add AI players in any mode.</div></div>
+  <div id="inst">${installHTML()}</div>`;
 }
 function setupHTML(){
   const total=OFF.names.length+OFF.bots,ok=OFF.names.length>=1&&total>=3;
   return `<div class="card"><h2>Players (${total})</h2>
-  <ul>${OFF.names.map((n,i)=>`<li><span>${esc(n)}</span><button class="sm ghost" data-a="rm" data-i="${i}">✕</button></li>`).join('')||'<li class="mut">Add the people who are playing</li>'}</ul>
-  <form id="addf" class="row" style="margin-top:8px"><input id="pname" maxlength="16" placeholder="Player name" autocomplete="off"><button class="sm fix" style="padding:12px 18px">Add</button></form>
-  <div class="row" style="margin-top:14px"><span>🤖 AI players</span><button class="sm fix ghost" data-a="botminus"${OFF.bots<1?' disabled':''}>−</button><b class="fix">${OFF.bots}</b><button class="sm fix ghost" data-a="botplus"${OFF.bots>7?' disabled':''}>+</button></div>
-  <div class="mut" style="margin-top:6px">You need 3 or more players in total. AI players give clues, vote and guess on their own.</div></div>
+  <ul>${OFF.names.map((n,i)=>`<li><span class="who">${avatar({name:n})}<span>${esc(n)}</span></span><button class="sm ghost" data-a="rm" data-i="${i}" aria-label="Remove this player">✕</button></li>`).join('')||'<li class="mut">Add the name of every person who is playing</li>'}</ul>
+  <form id="addf" class="row" style="margin-top:12px"><input id="pname" maxlength="16" placeholder="Player name" autocomplete="off" enterkeyhint="done"><button class="fix" style="width:auto;margin:0;padding:0 24px">Add</button></form>
+  <div class="row" style="margin-top:16px"><span>🤖 AI players</span><button class="sm fix ghost" data-a="botminus"${OFF.bots<1?' disabled':''} aria-label="One AI player fewer">−</button><b class="fix">${OFF.bots}</b><button class="sm fix ghost" data-a="botplus"${OFF.bots>7?' disabled':''} aria-label="One more AI player">+</button></div>
+  <div class="mut" style="margin-top:8px">You need 3 or more players in total. AI players give clues${canSpeak?' out loud':''}, vote and guess on their own.</div></div>
   ${settingsHTML(OFF.settings,true)}
   <button data-a="offstart"${ok?'':' disabled'}>${ok?'Start game':'Need at least 3 players'}</button><button class="ghost" data-a="home">Back</button>`;
 }
 function roleCard(r,name){
   if(r.role==='spec')return `<div class="card center mut">Round in progress — you will join the next round.</div>`;
   if(U.hide)return `<div class="card center"><button class="sm ghost" data-a="hide">Show my word</button></div>`;
-  let h='<div class="card center">';
-  if(r.role==='crew')h+=`<div class="mut">Secret word</div><div class="big ok">${esc(r.word)}</div>`;
+  let h='<div class="card center role">';
+  if(r.role==='crew')h+=`<div class="mut">Your secret word</div><div class="big ok">${esc(r.word)}</div>`;
   else{h+=`<div class="big imp">You are the IMPOSTER</div><div class="mut">You don't know the word. Blend in.</div>`;
     if(r.hint)h+=`<div style="margin-top:8px">Similar word: <b>${esc(r.hint)}</b></div>`;
     if(r.mates.length>1)h+=`<div class="mut">Fellow imposters: ${r.mates.filter(id=>id!==V.you).map(name).join(', ')}</div>`}
   if(r.cat)h+=`<div class="mut">Category: ${esc(r.cat)}</div>`;
-  if(!V.offline)h+=`<div style="margin-top:8px"><button class="sm ghost" data-a="hide">Hide</button></div>`;
+  if(!V.offline)h+=`<div style="margin-top:10px"><button class="sm ghost" data-a="hide">Hide</button></div>`;
   return h+'</div>';
 }
-function scoresHTML(){return `<div class="card"><h2>Scores</h2><ul>${V.players.slice().sort((a,b)=>b.score-a.score).map(p=>`<li><span>${esc(p.name)}${p.on?'':'<span class="tag">offline</span>'}</span><b>${esc(p.score)}</b></li>`).join('')}</ul></div>`}
+function scoresHTML(){
+  const top=Math.max(0,...V.players.map(p=>p.score));
+  return `<div class="card"><h2>Scores</h2><ul>${V.players.slice().sort((a,b)=>b.score-a.score).map(p=>`<li><span class="who">${avatar(p)}<span>${esc(p.name)}${p.on?'':'<span class="tag">offline</span>'}</span></span><b>${top>0&&p.score===top?'👑 ':''}${esc(p.score)}</b></li>`).join('')}</ul></div>`;
+}
 function gameHTML(){
   const v=V,r=v.round,off=v.offline,S=v.settings,host=off||v.you===v.hostId;
-  const name=id=>esc((v.players.find(p=>p.id===id)||{}).name||'?');
-  const pass=(id,btn,pre)=>`<div class="card center"><div class="mut">${pre||'Pass the phone to'}</div><div class="big">${name(id)}</div><button data-a="uncover">${btn}</button></div>`;
-  const isBot=id=>!!(v.players.find(p=>p.id===id)||{}).bot,hasBots=v.players.some(p=>p.bot);
+  const P=id=>v.players.find(p=>p.id===id)||{name:'?'};
+  const name=id=>esc(P(id).name||'?');
+  const who=(id,extra)=>`<span class="who">${avatar(P(id))}<span>${name(id)}${extra||''}</span></span>`;
+  const face=id=>avatar(P(id)).replace('class="av','class="av xl');
+  const pass=(id,btn,pre)=>`<div class="card center"><div class="mut">${pre||'Pass the phone to'}</div>${face(id)}<div class="big">${name(id)}</div><button data-a="uncover">${btn}</button></div>`;
+  const isBot=id=>!!P(id).bot,hasBots=v.players.some(p=>p.bot);
   if(v.phase==='lobby'){
     const n=v.players.filter(p=>p.on).length,nBots=v.players.filter(p=>p.bot).length;
-    return `<div class="card center"><div class="mut">${v.pub?'Public room':'Room code'}</div>${v.pub?'':`<div class="code">${esc(v.code)}</div><button class="ghost" data-a="copy">Copy invite link</button>`}</div>
-    <div class="card"><h2>Players (${n})</h2><ul>${v.players.map(p=>`<li><span>${esc(p.name)}${p.id===v.hostId?'<span class="tag">host</span>':''}${p.id===v.you?'<span class="tag">you</span>':''}${p.bot?'<span class="tag">AI</span>':''}${p.on?'':'<span class="tag">offline</span>'}</span><span><b>${esc(p.score)}</b>${host&&p.bot?` <button class="sm ghost" data-a="rmbot" data-id="${esc(p.id)}">✕</button>`:''}</span></li>`).join('')}</ul>
+    return `<div class="card center"><div class="mut">${v.pub?'Public room':'Room code'}</div>${v.pub?'<div style="margin-top:6px">Anyone who taps Quick play can land here.</div>':`<div class="code">${esc(v.code)}</div><div class="mut">Friends type this code on their own phone, or open your invite link.</div>
+      <div class="row">${canShare?'<button data-a="share">Share invite</button>':''}<button class="ghost" data-a="copy">Copy invite link</button></div>`}</div>
+    <div class="card"><h2>Players (${n})</h2><ul>${v.players.map(p=>`<li><span class="who">${avatar(p)}<span>${esc(p.name)}${p.id===v.hostId?'<span class="tag">host</span>':''}${p.id===v.you?'<span class="tag">you</span>':''}${p.bot?'<span class="tag">AI</span>':''}${p.on?'':'<span class="tag">offline</span>'}</span></span><span class="who"><b>${esc(p.score)}</b>${host&&p.bot?`<button class="sm ghost" data-a="rmbot" data-id="${esc(p.id)}" aria-label="Remove this AI player">✕</button>`:''}</span></li>`).join('')}</ul>
     ${host?`<button class="ghost" data-a="addbot"${nBots>7?' disabled':''}>🤖 Add an AI player</button>`:''}
-    <div class="mut" style="margin-top:8px">Imposters this round: ${S.imps==='auto'?autoImps(n):esc(S.imps)}</div></div>
+    <div class="mut" style="margin-top:10px">Imposters this round: ${S.imps==='auto'?autoImps(n):esc(S.imps)}</div>
+    ${!nBots||!canSpeak?'':`<div class="mut" style="margin-top:6px">${pickVoice(S.lang)?'AI players say their clues out loud on every device. The 🔊 button at the top turns the voice off.':'This device has no voice for '+esc((WORDS[S.lang]||WORDS.en).name)+', so here the AI players’ clues are shown but not spoken.'}</div>`}</div>
     ${settingsHTML(S,host)}
     ${host||v.pub?`<button data-a="start"${n<3?' disabled':''}>${n<3?'Need at least 3 players':'Start game'}</button>`:'<div class="card center mut">Waiting for the host to start…</div>'}
     <button class="ghost" data-a="home">Leave room</button>`;
   }
   const solo=off&&r.order.filter(id=>!isBot(id)).length<2,cover=off&&U.cover&&!solo;   // one human on the phone: nothing to hide from anyone
-  const board=off&&!hasBots?'':`<div class="card"><h2>Clues</h2><ul>${r.order.map(id=>`<li><span>${name(id)}${id===r.turnId?' 👈':''}</span><span>${(r.clues[id]||[]).map(esc).join(' · ')||'<span class="mut">…</span>'}</span></li>`).join('')}</ul></div>`;
+  const board=off&&!hasBots?'':`<div class="card"><h2>Clues</h2><ul>${r.order.map(id=>`<li>${who(id,id===r.turnId?' 👈':'')}<span class="said">${(r.clues[id]||[]).map(esc).join(' · ')||'<span class="mut">…</span>'}</span></li>`).join('')}</ul></div>`;
   const mine=off?'':roleCard(r,name);
   if(v.phase==='reveal'){
     if(off)return cover?pass(v.you,'Show my role'):roleCard(r,name)+`<button data-a="nextseat">${solo?'Start':'Hide and pass on'}</button>`;
@@ -390,9 +498,9 @@ function gameHTML(){
   }
   if(v.phase==='clues'){
     const bot=isBot(r.turnId),my=!bot&&(off||r.turnId===v.you),say=r.say&&r.say.id===r.turnId?r.say.text:'';
-    return mine+`<div class="card center"><div class="mut">Word ${esc(r.clueNo)} of ${esc(S.wpp)}</div><div class="big">${name(r.turnId)}</div>
+    return mine+`<div class="card center"><div class="mut">Word ${esc(r.clueNo)} of ${esc(S.wpp)}</div>${face(r.turnId)}<div class="big">${name(r.turnId)}</div>
     ${say?`<div class="mut">says</div><div class="big ok">${esc(say)}</div>`:`<div class="mut">${bot?'is thinking…':off?'say one clue word out loud':my?'your turn — say or type one clue word':'is giving a clue'}</div><div class="timer" id="tm"></div>`}
-    ${my?(off&&!hasBots?'':`<input id="clue" maxlength="30" placeholder="${hasBots?'Type your clue — AI players cannot hear you':'Your clue word (optional)'}" autocomplete="off">`)+`<button data-a="clue">Done — next player</button>`:''}</div>`+board;
+    ${my?(off&&!hasBots?'':`<input id="clue" maxlength="30" placeholder="Type your clue word" autocomplete="off" enterkeyhint="send"><div class="mut" style="margin-top:8px">${hasBots?'AI players cannot hear you, so type your clue.':'Typing is optional. The referee checks typed clues at the end.'}</div>`)+`<button data-a="clue">Done — next player</button>`:''}</div>`+board;
   }
   if(v.phase==='discuss')return mine+`<div class="card center"><h2>Discuss — who is the imposter?</h2><div class="timer" id="tm"></div>${host?'<button data-a="go">Vote now</button>':''}</div>`+board;
   if(v.phase==='vote'){
@@ -400,21 +508,33 @@ function gameHTML(){
     if(cover)return pass(v.you,'Vote in secret');
     if(r.role==='spec')return mine+`<div class="card center mut">Players are voting… (${esc(r.voted.length)}/${esc(r.order.length)})</div>`;
     if(r.myVote)return mine+`<div class="card center"><h2>Vote sent</h2><div class="mut">Waiting for the others (${esc(r.voted.length)}/${esc(r.order.length)})</div><div class="timer" id="tm"></div></div>`+board;
-    return (off?`<div class="card center"><b>${name(v.you)}</b></div>`:mine)+`<div class="card"><h2>Pick ${esc(r.k)} suspect${r.k>1?'s':''}</h2>
-    ${r.order.filter(id=>id!==v.you).map(id=>`<button class="pick${U.sel.includes(id)?' on':''}" data-a="pick" data-id="${esc(id)}">${name(id)}</button>`).join('')}
+    return (off?`<div class="card center">${face(v.you)}<div><b>${name(v.you)}</b>, vote in secret</div></div>`:mine)+`<div class="card"><h2>Pick ${esc(r.k)} suspect${r.k>1?'s':''}</h2>
+    ${r.order.filter(id=>id!==v.you).map(id=>`<button class="pick${U.sel.includes(id)?' on':''}" data-a="pick" data-id="${esc(id)}">${avatar(P(id))}<span>${name(id)}</span></button>`).join('')}
     <button data-a="vote"${U.sel.length!==r.k?' disabled':''}>Confirm vote</button><div class="timer" id="tm"></div></div>`+board;
   }
   if(v.phase==='guess'){
     if(cover&&!isBot(r.guesser))return pass(r.guesser,'Guess the word','All imposters were caught! Last chance — pass the phone to');
     if(r.opts)return `<div class="card"><h2 class="imp">You were caught!</h2><div class="mut">Guess the secret word to steal the win.</div>${r.opts.map((w,i)=>`<button class="pick" data-a="guess" data-i="${i}">${esc(w)}</button>`).join('')}<div class="timer" id="tm"></div></div>`;
-    return `<div class="card center"><h2>All imposters were caught!</h2><div class="mut">${name(r.guesser)} gets one guess at the secret word…</div><div class="timer" id="tm"></div></div>`;
+    return `<div class="card center"><h2>All imposters were caught!</h2>${face(r.guesser)}<div class="mut">${name(r.guesser)} gets one guess at the secret word…</div><div class="timer" id="tm"></div></div>`;
   }
-  // result
+  // result: the winner, then the referee's report (the word each player got, every clue checked against the secret word)
   const msg={crew:['Crew wins!','All imposters were caught and the guess was wrong.','ok'],steal:['Imposters win!','They were caught, but guessed the secret word.','imp'],imp:['Imposters win!','They escaped the vote.','imp']}[r.outcome];
-  return `<div class="card center"><div class="big ${msg[2]}">${msg[0]}</div><div class="mut">${msg[1]}</div>
-  <div style="margin-top:10px">Secret word: <b>${esc(r.word)}</b> <span class="mut">(${esc(r.cat)})</span></div>
+  const marks=r.marks||{},SYM={y:'✓',w:'≈',n:'✗',s:'🚫',u:'?'},TIP={y:'fits the secret word',w:'loosely fits',n:'no link found',s:'this is the secret word itself',u:'the referee does not know this word'};
+  const chip=(id,c,i)=>{
+    if(c==='—')return '<span class="chip u">no clue</span>';
+    const said=c==='✓',auto=said||typeof BOT==='undefined'?'u':BOT.judge(c,S.lang,r.word)||'u',m=(marks[id]||{})[i]||auto;
+    const inner=`${said?'<span class="mut">said out loud</span>':esc(c)} <i>${SYM[m]}</i>`;
+    return host?`<button class="chip ${m}" data-a="mark" data-id="${esc(id)}" data-i="${i}" data-v="${m==='y'||m==='w'?'n':'y'}" title="${TIP[m]} — tap to change">${inner}</button>`:`<span class="chip ${m}" title="${TIP[m]}">${inner}</span>`;
+  };
+  const got=id=>r.imps.includes(id)?`<b class="imp">no word</b>${r.hintWord?` · hint: <b>${esc(r.hintWord)}</b>`:''}`:`<b>${esc(r.word)}</b>`;
+  return `<div class="card center role"><div class="big ${msg[2]}">${msg[0]}</div><div class="mut">${msg[1]}</div>
+  <div style="margin-top:12px">Secret word: <b>${esc(r.word)}</b> <span class="mut">(${esc(r.cat)})</span></div>
   <div>Imposter${r.imps.length>1?'s':''}: <b class="imp">${r.imps.map(name).join(', ')}</b></div></div>
-  <div class="card"><h2>Votes</h2><ul>${r.order.map(id=>`<li><span>${name(id)}${r.imps.includes(id)?'<span class="tag imp">imposter</span>':''}</span><span class="mut">${esc(r.cnt[id]||0)} vote${r.cnt[id]===1?'':'s'} · voted ${(r.votes[id]||[]).map(name).join(', ')||'—'}</span></li>`).join('')}</ul></div>
+  <div class="card ref"><h2>🧑‍⚖️ Referee</h2><div class="mut">The word each player got, and whether each clue fits the secret word.</div>
+  <ul style="margin-top:12px">${r.order.map(id=>`<li><div class="top">${who(id,r.imps.includes(id)?'<span class="tag imp">imposter</span>':'')}<span class="got">got ${got(id)}</span></div>
+    <div>${(r.clues[id]||[]).map((c,i)=>chip(id,c,i)).join('')||'<span class="chip u">no clue</span>'}</div>
+    <div class="mut" style="margin-top:8px">${esc(r.cnt[id]||0)} vote${r.cnt[id]===1?'':'s'} · voted ${(r.votes[id]||[]).map(name).join(', ')||'—'}</div></li>`).join('')}</ul>
+  <div class="mut" style="margin-top:12px">✓ fits · ≈ loosely fits · ✗ no link found · ? the referee does not know this word.${off?' Tap a mark to change it.':host?' You are the host: tap a mark to change it.':' The host can change a mark.'}</div></div>
   ${scoresHTML()}
   ${host||v.pub?`<button data-a="start">Next round</button>${off||!host?'':'<button class="ghost" data-a="lobby">Back to lobby (change settings)</button>'}`:'<div class="card center mut">Waiting for the host…</div>'}
   <button class="ghost" data-a="home">${off?'End game':'Leave room'}</button>`;
@@ -434,21 +554,34 @@ function render(){
   else{
     const ph=(G&&G.offline?G.phase:V.phase)+'|'+((G&&G.offline?G.round:V.round)||{}).order;
     if(ph!==lastPhase){lastPhase=ph;U={i:0,cover:true,sel:[],hide:false}}
-    if(G&&G.offline){V=viewFor(offSeat());vAt=Date.now()}
+    if(G&&G.offline){V=viewFor(offSeat());vAt=Date.now();voice(V)}
     h=gameHTML();
   }
   $('#main').innerHTML=h;
+  const scr=mode==='game'?lastPhase:mode;   // a new screen slides in and starts at the top; updates to the same screen do not
+  if(scr!==lastScreen){lastScreen=scr;slideIn();if(mode==='game'&&typeof scrollTo==='function')scrollTo(0,0)}
   for(const id in keep){const e=document.getElementById(id);if(e&&mode!=='home')e.value=keep[id]}
   if(foc&&keep[foc]!==undefined){const e=document.getElementById(foc);e&&e.focus()}
   const online=mode==='game'&&V&&!V.offline;
   $('#call').hidden=$('#chat').hidden=!online;
   $('#about').hidden=mode!=='home';   // the "How to play" text only shows on the home screen
-  $('#hdr').textContent=online?(V.pub?'Public room':'Room '+V.code):mode==='game'?'In person':'';
+  $('#hdr').textContent=online?(V.pub?'Public room':V.code):mode==='game'?'In person':'';   // the room code stays in view all game long
   const qb=$('#quit');qb.hidden=mode!=='game';if(qb.hidden){qb.textContent='Leave';delete qb.dataset.sure}   // a way out in the middle of a round
+  const sb=$('#snd');sb.hidden=!(mode==='game'&&canSpeak);   // the game's voice (AI players' clues and the referee's result) on / off
+  sb.textContent=voiceOn?'🔊':'🔇';sb.title=sb.ariaLabel=voiceOn?'Voice is on — tap to turn it off':'Voice is off — tap to turn it on';
+  callInfo();
   keepAwake();
   paintTimer();
 }
-function paintTimer(){const e=$('#tm');if(!e||!V)return;if(!V.left){e.textContent='';return}e.textContent=Math.max(0,Math.ceil((V.left-(Date.now()-vAt))/1000))}
+function slideIn(){   // the cards of a new screen fade up into place, one after the other (only these cards: later updates do not replay it)
+  if(typeof matchMedia!=='function'||matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+  [...$('#main').children].forEach((c,i)=>{if(c.animate)c.animate([{opacity:0,transform:'translateY(10px)'},{opacity:1,transform:'none'}],{duration:280,delay:Math.min(i,3)*45,easing:'ease-out',fill:'backwards'})});
+}
+function paintTimer(){
+  const e=$('#tm');if(!e||!V)return;if(!V.left){e.textContent='';return}
+  const left=Math.max(0,V.left-(Date.now()-vAt)),tot=({reveal:8,clues:V.settings.clueT,discuss:V.settings.discT,vote:60,guess:20}[V.phase]||0)*1000;
+  e.textContent=Math.ceil(left/1000);e.style.setProperty('--p',tot?Math.min(1,left/tot):0);e.classList.toggle('low',left<=3000);   // the bar under the number runs down
+}
 setInterval(paintTimer,200);setInterval(syncCalls,3000);setInterval(clientBeat,3000);
 addEventListener('pagehide',()=>{if(net)farewell(net)});   // closing or reloading the tab
 async function keepAwake(){   // stop phone screens from sleeping in the middle of a game
@@ -458,18 +591,29 @@ async function keepAwake(){   // stop phone screens from sleeping in the middle 
 document.addEventListener('visibilitychange',keepAwake);
 
 /* ---------- input ---------- */
-function readHome(){myName=($('#name').value.trim()||'Player'+(10+rnd(90))).slice(0,16);myLang=$('#lang').value;store('imp_name',myName);store('imp_lang',myLang)}
+function readHome(need){   // a name is all a player ever gives: no login, no account
+  const e=$('#name'),n=e.value.trim().slice(0,16);myLang=$('#lang').value;store('imp_lang',myLang);
+  if(n){myName=n;store('imp_name',n)}
+  if(need&&!n){toast('Type your name first');e.classList.add('bad');e.focus();return false}
+  return true;
+}
 const doAct=m=>{if(G&&G.offline)act(V.you,m);else send(m)};
 document.body.addEventListener('click',e=>{
+  primeVoice();
   const b=e.target.closest('[data-a]');if(!b||b.disabled)return;const a=b.dataset.a;
   switch(a){
-    case 'create':readHome();hostRoom(genCode());toast('Creating room…');break;
-    case 'join':{readHome();const c=$('#code').value.trim().toUpperCase();if(c.length<4)return toast('Enter the room code');joinRoom(c);toast('Joining…');break}
-    case 'quick':readHome();quick();toast('Finding a public room…');break;
-    case 'offline':readHome();OFF.settings.lang=myLang;mode='setup';render();break;
+    case 'create':if(!readHome(true))break;hostRoom(genCode());toast('Creating room…');break;
+    case 'join':{if(!readHome(true))break;const c=$('#code').value.trim().toUpperCase();if(c.length<4)return toast('Enter the room code');joinRoom(c);toast('Joining…');break}
+    case 'quick':if(!readHome(true))break;quick();toast('Finding a public room…');break;
+    case 'offline':readHome();OFF.settings.lang=myLang;if(myName&&!OFF.names.length){OFF.names=[myName];store('imp_names',OFF.names)}mode='setup';render();break;
     case 'home':goHome();break;
     case 'quit':if(b.dataset.sure)goHome();   // two taps, so nobody leaves (or closes the room) by accident
       else{b.dataset.sure='1';b.textContent='Tap again to leave';setTimeout(()=>{if(b.dataset.sure){delete b.dataset.sure;b.textContent='Leave'}},3000)}break;
+    case 'snd':voiceOn=!voiceOn;store('imp_voice',voiceOn);if(!voiceOn)hush();toast(voiceOn?'Voice is on':'Voice is off');render();break;
+    case 'hear':for(const v of document.querySelectorAll('#tiles video')){const pl=v.play();pl&&pl.catch(()=>{})}b.hidden=true;break;
+    case 'share':{const u=location.origin+location.pathname+'?room='+V.code;navigator.share({title:'Imposter',text:'Join my Imposter game. Room code: '+V.code,url:u}).catch(()=>{});break}
+    case 'install':if(installEvt){const ev=installEvt;installEvt=null;ev.prompt();ev.userChoice.then(paintInstall,paintInstall)}break;
+    case 'mark':doAct({t:'mark',id:b.dataset.id,i:+b.dataset.i,v:b.dataset.v});break;
     case 'rm':OFF.names.splice(+b.dataset.i,1);store('imp_names',OFF.names);render();break;
     case 'offstart':cleanupNet();G=newGame({offline:true});G.settings=Object.assign({},OFF.settings);
       G.players=OFF.names.map((n,i)=>({id:'p'+i,name:n,score:0,connected:true}));for(let i=0;i<OFF.bots;i++)addBot();
@@ -482,7 +626,10 @@ document.body.addEventListener('click',e=>{
     case 'uncover':U.cover=false;render();break;
     case 'nextseat':U.i++;U.cover=true;if(U.i>=humans().length)act(null,{t:'go'});else render();break;
     case 'hide':U.hide=!U.hide;render();break;
-    case 'clue':{const i=$('#clue');const t=i?i.value:'';if(i)i.value='';if(G&&G.offline){if(!isBotId(V.round.turnId))act(V.round.turnId,{t:'clue',text:t})}else send({t:'clue',text:t});break}
+    case 'clue':{const i=$('#clue');const t=i?i.value:'';
+      const w=V.round&&(G&&G.offline?(viewFor(V.round.turnId).round||{}).word:V.round.word);   // the one hard rule: the secret word itself is not a clue
+      if(w&&t.trim().toLowerCase()===String(w).toLowerCase()){toast('That is the secret word itself. Give a clue about it instead.');break}
+      if(i)i.value='';if(G&&G.offline){if(!isBotId(V.round.turnId))act(V.round.turnId,{t:'clue',text:t})}else send({t:'clue',text:t});break}
     case 'pick':{const id=b.dataset.id,k=V.round.k;if(U.sel.includes(id))U.sel=U.sel.filter(x=>x!==id);else{if(k===1)U.sel=[];if(U.sel.length<k)U.sel.push(id)}render();break}
     case 'vote':{const t=U.sel.slice(),me=V.you;if(G&&G.offline){U.i++;U.cover=true;U.sel=[];act(me,{t:'vote',targets:t})}else send({t:'vote',targets:t});break}
     case 'guess':doAct({t:'guess',i:+b.dataset.i});break;
@@ -503,4 +650,7 @@ document.body.addEventListener('submit',e=>{
   if(e.target.id==='addf'){const i=$('#pname'),t=i.value.trim().slice(0,16);if(t){OFF.names.push(t);store('imp_names',OFF.names);i.value='';render();$('#pname').focus()}}
 });
 document.body.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='clue'){e.preventDefault();$('[data-a="clue"]').click()}});
+document.body.addEventListener('input',e=>{if(e.target.id==='name')e.target.classList.remove('bad')});
+// keeps a copy of the game on the device, so it opens without internet and can be installed like an app (see sw.js)
+if(typeof navigator!=='undefined'&&'serviceWorker' in navigator)addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{})});
 render();

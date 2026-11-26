@@ -276,6 +276,18 @@ const BOT=(()=>{
     return pick(cs.map((c,i)=>i),i=>Math.exp((sc[i]-top)/TUNE.guessDoubt));   // usually the best fit, but not always: it can talk itself into a wrong answer
   }
   const suspect=view=>vote(view)[0]||null;
+  // the referee: does this clue fit the secret word?  y = yes, w = loosely, n = no link found, s = it is the secret word itself,
+  // u = a word that is not in the lists (so it cannot be checked), '' = nothing was typed
+  function judge(raw,lang,word){
+    lex();const k=norm(raw);if(!k||k==='—'||k==='✓'||k==='…')return '';
+    const c=conceptOf(word,lang);if(c<0)return 'u';
+    if(k===norm(word))return 's';
+    const t=rec(raw,lang);if(t==null)return 'u';
+    if(t===1000+c)return 's';
+    if(L.strong[c].includes(t))return 'y';
+    if(L.weak[c].includes(t)||L.generic[Math.floor(c/10)].includes(t))return 'w';   // true of the whole category, not this word in particular
+    return t>=1000?'u':'n';
+  }
   // used by the tests: are the word lists complete and consistent?
   function check(){
     lex();const out={sizes:{},bad:[]};
@@ -287,5 +299,5 @@ const BOT=(()=>{
     if(und(L.vague))out.bad.push('vague');
     return out;
   }
-  return {clue,vote,guess,suspect,check,TUNE};
+  return {clue,vote,guess,suspect,judge,check,TUNE};
 })();
