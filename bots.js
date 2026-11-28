@@ -72,6 +72,23 @@ ru:["сыр|круглый|духовка|горячий|ломтик|белый
 "укол|вор|форма|закон|защита|трактор|деревня|готовка|нож|машина|автобус|песня|голос|музыка|сцена|знаменитый|небо|летать|забота|армия|война|оружие|смелый|работа|зарплата"]
 };
 
+/* PICS-BEGIN */
+/* ---------- pictures: one for every secret word and clue word, in the same order as the word lists ----------
+   "a/b" = draw a, or b on a device that cannot draw a (newer pictures are missing on older phones); "-" = no picture.
+   A clue never uses the picture of a secret word, so a picture cannot give the secret word away. */
+const PIC_WORD=["🍕|🍚|🍞|🥚|🥛|🍎|🍌|🥭/-|🍵|🍦",
+"🐶|🐱|🐘|🦁|🐯|🐵|🐴|🐮|🐍|🐟",
+"🏫|🏥|🛫|🏖️|🛒|📚|🏞️|🍽️|🎬|🦒",
+"📱|🪑/-|🕰️|☂️|🔑|🪞/-|📖|👟|🚲|📺",
+"👨‍⚕️/-|👩‍🏫/-|👮|👨‍🌾/-|👨‍🍳/-|🚕|👩‍🎤/🎤|👨‍✈️/-|👩‍⚕️/-|🪖/💂"];
+const PIC_CLUE=["🧀|⭕|🔥|♨️|🍰|⚪|🌾|🍲|🌱|🥣|🥞|☁️|🌾|🐔|💛|🍹|🥤|🍇|🔴|🌳|🍬|📏|🕶️|☕|🍃|🍭|❄️|🍧|🧒|😋|🍳",
+"🐾|📢|🤝|🐿️|🛡️|🐭|🧗|🏔️|👃|🌫️|🌲|👑|🔊|🌴|💪|🦓|😂|🎢|⚡|🏁|🌽|🌿|🐏|☠️|⚠️|🐛|💧|🏊|🌊|🛶|🥅|🌄|⛺",
+"📝|🔔|🎓|🤒|🛏️|💊|✈️|🌍|🎫|🧳/💼|🏜️|🌞|🛍️|🥕|👥|💰|🏪|🤫|👓|🗄️|🚶|🛋️|⚽|🤵|📋|-|🎥|🖥️|🍿|🌑|💺|⛓️|👫|👋",
+"📞|👖|🔋|🛎️|🧘|🦵/-|🪵/🌳|⌛|🧱/-|🔢|⏰|🌧️|🔓|💦|-|🔒|🚪|🔩|🤏/🐜|🙂|👀|✨|🤳|📄|📃|📜|🦶/👣|🧦|🎀|🏃|🛞/🎡|-|🛣️|🎮|👁️|📰|👍|🏠",
+"💉|🦹/👤|👔|⚖️|🛡️|🚜|🏘️|🥘|🔪|🚗|🚌|🎵|🗣️|🎶|🎭|🌟|⛅|🕊️|❤️|🎖️|⚔️|🔫|🦸/💪|💼|💵"];
+const PIC_MORE="rocket:🚀 train:🚆 ship:🚢 boat:⛵ truck:🚚 ambulance:🚑 helicopter:🚁 scooter:🛵 metro:🚇 petrol:⛽ fuel:⛽ traffic:🚦 anchor:⚓ satellite:🛰️ ufo:🛸 moon:🌙 star:⭐ earth:🌍 world:🌍 space:🌌 cloud:☁️ snow:⛄ ice:🧊/❄️ wind:🌬️ storm:⛈️ thunder:⚡ lightning:⚡ rainbow:🌈 mountain:⛰️ hill:⛰️ volcano:🌋 island:🏝️ desert:🏜️ ocean:🌊 flower:🌸 rose:🌹 sunflower:🌻 cactus:🌵 mushroom:🍄 seed:🌱 plant:🌱 garden:🌷 fire:🔥 smoke:💨 light:💡 lamp:💡 bulb:💡 candle:🕯️ night:🌃 morning:🌅 evening:🌇 bird:🐦 duck:🦆 eagle:🦅 owl:🦉 parrot:🦜/🐦 peacock:🦚/🐦 penguin:🐧 chicken:🐔 rooster:🐓 pig:🐷 sheep:🐑 goat:🐐 rabbit:🐰 bear:🐻 panda:🐼 wolf:🐺 fox:🦊 deer:🦌 camel:🐫 zebra:🦓 crocodile:🐊 turtle:🐢 frog:🐸 whale:🐳 dolphin:🐬 shark:🦈 octopus:🐙 crab:🦀 bee:🐝 honey:🍯 ant:🐜 spider:🕷️ butterfly:🦋 insect:🐞 bug:🐛 worm:🐛 rat:🐀 squirrel:🐿️ dragon:🐉 dinosaur:🦕 buffalo:🐃 bull:🐂 paw:🐾 burger:🍔 fries:🍟 sandwich:🥪 noodles:🍜 pasta:🍝 soup:🍲 curry:🍛 biryani:🍛 cake:🎂 chocolate:🍫 cookie:🍪 biscuit:🍪 candy:🍬 coffee:☕ juice:🍹 wine:🍷 beer:🍺 orange:🍊 lemon:🍋 grapes:🍇 watermelon:🍉 strawberry:🍓 cherry:🍒 pineapple:🍍 coconut:🥥 tomato:🍅 potato:🥔 carrot:🥕 corn:🌽 chilli:🌶️ pepper:🌶️ meat:🍖 spoon:🥄 fork:🍴 bottle:🍾 pot:🍲 pan:🍳 lunch:🍱 baby:👶 boy:👦 girl:👧 man:👨 woman:👩 mother:👩 father:👨 family:👪 hand:✋ finger:☝️ eye:👁️ ear:👂 nose:👃 mouth:👄 hair:💇 brain:🧠 heart:❤️ love:❤️ happy:😀 smile:😀 sad:😢 cry:😭 angry:😠 sleep:😴 dream:💭 laugh:😂 fear:😱 scary:😱 ghost:👻 alien:👽 robot:🤖 angel:👼 devil:😈 god:🙏 pray:🙏 kiss:💋 dance:💃 wedding:💒 birthday:🎂 party:🎉 gift:🎁 present:🎁 balloon:🎈 ball:⚽ football:⚽ cricket:🏏 basketball:🏀 tennis:🎾 game:🎮 dice:🎲 cards:🃏 trophy:🏆 medal:🏅 winner:🏆 win:🏆 flag:🚩 map:🗺️ camera:📷 photo:📷 video:📹 radio:📻 computer:💻 laptop:💻 keyboard:⌨️ internet:🌐 email:📧 letter:✉️ message:💬 pen:🖊️ pencil:✏️ bag:🎒 box:📦 hammer:🔨 tool:🔧 scissors:✂️ bath:🛁 shower:🚿 toilet:🚽 brush:🖌️ paint:🎨 color:🎨 colour:🎨 art:🎨 guitar:🎸 drum:🥁 piano:🎹 mic:🎙️ microphone:🎙️ hat:🎩 cap:🧢 shirt:👕 dress:👗 pants:👖 glasses:👓 diamond:💎 gold:🥇 crown:👑 bomb:💣 sword:⚔️ magic:✨ bank:🏦 office:🏢 building:🏢 city:🏙️ town:🏘️ house:🏠 hotel:🏨 church:⛪ mosque:🕌 castle:🏰 bridge:🌉 tent:⛺ factory:🏭 stadium:🏟️ pool:🏊 gym:🏋️ exam:📝 test:📝 homework:📝 science:🔬 math:🔢 maths:🔢 india:🇮🇳 calendar:📅 new:🆕 free:🆓 ok:👌 yes:✅ no:❌ question:❓ idea:💡 danger:⚠️ stop:🛑 up:⬆️ down:⬇️ left:⬅️ right:➡️ top:🔝 hundred:💯 luck:🍀 lucky:🍀 peace:✌️ fight:🥊 boxing:🥊 queen:👸 prince:🤴 princess:👸 student:🎓 scientist:🔬 artist:🎨 cook:🥘 barber:💈 post:📮 astronaut:🚀 clown:🤡 santa:🎅 christmas:🎄 diwali:🎆 fireworks:🎆 holi:🎨 festival:🎉 movie:🎥";   // more English words people often type as clues
+/* PICS-END */
+
 /* ---------- which clue words fit which secret word ----------
    One entry per category: [clues that fit every word in the category, [one line per secret word]].
    Each line is "clues an AI player may say / extra clues it accepts from others". @Name points at another
@@ -170,7 +187,8 @@ const BOT=(()=>{
       WORDS[l].words.forEach((ws,ci)=>ws.forEach((w,wi)=>{const k=norm(w);if(!m.has(k))m.set(k,1000+ci*10+wi)}));
     }
     const text=(t,lang)=>t>=1000?words(lang).words[Math.floor((t-1000)/10)][(t-1000)%10]:((clue[lang]||clue.en)[t]||clue.en[t]);
-    return L={langs:Object.keys(WORDS),clue,strong,weak,generic,count,common,find,text,vague:list(CLUE_VAGUE),size:strong.length};
+    const picW=PIC_WORD.join('|').split('|'),picC=PIC_CLUE.join('|').split('|'),more=new Map(PIC_MORE.split(' ').map(s=>s.split(':')));
+    return L={langs:Object.keys(WORDS),clue,strong,weak,generic,count,common,find,text,vague:list(CLUE_VAGUE),size:strong.length,picW,picC,more};
   }
   // understand a typed clue: the room's language first, then English, then any other language
   function rec(raw,lang){
@@ -304,6 +322,13 @@ const BOT=(()=>{
     if(L.weak[c].includes(t)||L.generic[Math.floor(c/10)].includes(t))return 'w';   // true of the whole category, not this word in particular
     return t>=1000?'u':'n';
   }
+  // the picture for a word, in any of the game's languages (not an AI decision either): "a/b" = draw a, or b where a is missing; '' = none
+  function pic(raw,lang){
+    lex();const k=norm(raw);if(!k)return '';
+    const t=rec(raw,lang);
+    if(t!=null)return (t>=1000?L.picW[t-1000]:L.picC[t])||'';
+    return L.more.get(k)||(k.length>3&&L.more.get(k.endsWith('s')?k.slice(0,-1):k+'s'))||'';
+  }
   // the imposter's different word (not an AI decision: the game asks for it when a round starts). Any other word of the
   // category can come up, but one that shares clues with the secret word (Lion and Tiger, Doctor and Nurse) comes up more often.
   function near(ci,wi){
@@ -322,7 +347,9 @@ const BOT=(()=>{
     L.weak.forEach((a,c)=>{if(und(a))out.bad.push('weak '+c)});
     L.generic.forEach((a,c)=>{if(und(a))out.bad.push('generic '+c)});
     if(und(L.vague))out.bad.push('vague');
+    out.pics={clues:PIC_CLUE.map(s=>s.split('|').length).join(','),words:PIC_WORD.map(s=>s.split('|').length).join(','),more:L.more.size};
+    if(L.picC.some(e=>!e)||L.picW.some(e=>!e)||[...L.more].some(([w,e])=>!w||!e))out.bad.push('picture');
     return out;
   }
-  return {clue,vote,guess,suspect,judge,near,oddOne:v=>(lex(),oddOne(v)),check,TUNE};
+  return {clue,vote,guess,suspect,judge,near,pic,oddOne:v=>(lex(),oddOne(v)),check,TUNE};
 })();

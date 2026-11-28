@@ -245,6 +245,44 @@ function voice(v,first){   // called with every new view: say what an AI player 
     if(n>(spoke[p.id]||0)&&!first)speak(c[n-1],v.settings.lang,i);   // "first": we have just walked in, do not repeat old clues
     spoke[p.id]=n});
 }
+/* ---------- pictures ----------
+   Every word the game knows has a picture (an emoji, listed in bots.js). Right after a clue is given, its picture
+   pops up on every screen; the word cards, the clue list and the result show the pictures too. */
+const picMemo=new Map();let picX=null,picW0=0,popT=0,seenClue={};
+function canDraw(e){   // can this device draw this newer emoji? An older phone shows an empty box, or two separate pictures, instead
+  try{
+    if(!picX){const c=document.createElement('canvas');if(!c.getContext)return true;c.width=96;c.height=48;
+      picX=c.getContext('2d',{willReadFrequently:true});if(!picX)return true;
+      picX.textBaseline='top';picX.font='32px sans-serif';picW0=picX.measureText('😀').width}
+    if(picW0&&picX.measureText(e).width>picW0*1.5)return false;   // a combined picture that falls apart into two
+    picX.clearRect(0,0,96,48);picX.fillStyle='#000';picX.fillText(e,2,4);
+    const d=picX.getImageData(0,0,96,48).data;
+    for(let i=0;i<d.length;i+=4)if(d[i+3]>60&&(Math.abs(d[i]-d[i+1])>30||Math.abs(d[i+1]-d[i+2])>30))return true;   // it has colour: a real picture, not an empty box
+    return false;
+  }catch{return true}
+}
+function pic(word,lang){   // the picture for a word, or '' when there is none that this device can show
+  if(typeof BOT==='undefined'||!BOT.pic||word==null||word==='—'||word==='✓')return '';
+  const k=lang+'|'+word;if(picMemo.has(k))return picMemo.get(k);
+  const alts=String(botTry(()=>BOT.pic(word,lang),'')||'').split('/');let out='';
+  for(let i=0;i<alts.length;i++){const e=alts[i];if(!e||e==='-')break;
+    if(alts.length===1||i===alts.length-1||canDraw(e)){out=e;break}}   // "a/b": a if this device can draw it, otherwise b
+  picMemo.set(k,out);return out;
+}
+const picBig=(w,l)=>{const e=pic(w,l);return e?`<div class="pic">${esc(e)}</div>`:''};
+const picIn=(w,l)=>{const e=pic(w,l);return e?esc(e)+' ':''};
+function popClue(name,word,lang){   // "after they say a word, the object comes": the clue and its picture, large, for a moment
+  const e=$('#pop');if(!e)return;const p=pic(word,lang);
+  e.innerHTML=`<div class="pn">${esc(name)} says</div>${p?`<div class="pe">${esc(p)}</div>`:''}<div class="pw">${esc(word)}</div>`;
+  e.classList.add('show');clearTimeout(popT);popT=setTimeout(()=>e.classList.remove('show'),2400);
+}
+function clueNews(v,first){   // called with every new view: has somebody just given a clue?
+  const r=v&&v.round;if(!r){seenClue={};return}
+  for(const p of v.players){const c=r.clues[p.id]||[],n=c.length;
+    if(n>(seenClue[p.id]||0)&&!first&&(v.phase==='clues'||v.phase==='discuss')&&!(v.offline&&p.bot)){   // in person an AI player's clue is already shown large on the shared screen
+      const w=c[n-1];if(w!=='—'&&w!=='✓')popClue(p.name,w,v.settings.lang)}
+    seenClue[p.id]=n}
+}
 // heartbeat: a closed tab or a sleeping phone does not reliably close the connection, so both sides listen for silence (~15s)
 function hostBeat(){for(const id in conns){const c=conns[id];c.miss=(c.miss||0)+1;if(c.miss>4)hostDrop(c);else if(c.open)c.send({t:'ping'})}}
 function clientBeat(){
@@ -261,7 +299,7 @@ function cleanupNet(){
   if(net){const n=net;farewell(n);net=null;setTimeout(()=>{try{n.peer.destroy()}catch{}},300)}   // short delay so the goodbye gets out
   conns={};G=null;
 }
-function goHome(){cleanupNet();V=null;mode='home';$('#msgs').innerHTML='';spoke={};lastSay='';lastWin='';wasIn={};callErr='';hush();if(wake)wake.release().catch(()=>{});render()}
+function goHome(){cleanupNet();V=null;mode='home';$('#msgs').innerHTML='';spoke={};lastSay='';lastWin='';wasIn={};callErr='';seenClue={};clearTimeout(popT);$('#pop').classList.remove('show');hush();if(wake)wake.release().catch(()=>{});render()}
 function waiting(){mode='wait';render()}
 // stay registered with the signalling server (needed for new players and calls); retry gently if it drops
 function keepSignal(peer){peer.on('disconnected',()=>setTimeout(()=>{try{if(net&&net.peer===peer&&!peer.destroyed)peer.reconnect()}catch{}},2000))}
@@ -341,7 +379,7 @@ function joinRoom(code,o={}){
 }
 function quick(n=1){if(n>5){toast('Public rooms are full, try again soon');goHome();return}joinRoom('PUB-'+myLang+'-'+n,{pub:true,n})}
 function send(m){if(!net)return;if(net.host)act(net.pid,m);else if(net.conn&&net.conn.open)net.conn.send(m)}
-function setView(v){const first=!V;V=v;vAt=Date.now();voice(v,first);callNews(v,first);render();syncCalls()}
+function setView(v){const first=!V;V=v;vAt=Date.now();voice(v,first);clueNews(v,first);callNews(v,first);render();syncCalls()}
 
 /* ---------- voice / video call (browser to browser) ---------- */
 let localStream=null,calls={},blankT=null,callErr='',wasIn={};
@@ -468,9 +506,9 @@ function roleCard(r,name){
   if(U.hide)return `<div class="card center"><button class="sm ghost" data-a="hide">Show my word</button></div>`;
   const quiet=V.settings.give==='secret';   // secret imposter: every card looks the same, nobody is told who has the different word
   let h='<div class="card center role">';
-  if(r.role==='crew')h+=`<div class="mut">${quiet?'Your word':'Your secret word'}</div><div class="big ok">${esc(r.word)}</div>`;
+  if(r.role==='crew')h+=`<div class="mut">${quiet?'Your word':'Your secret word'}</div>${picBig(r.word,V.settings.lang)}<div class="big ok">${esc(r.word)}</div>`;
   else{
-    if(r.hint)h+=`<div class="sub imp">You are the IMPOSTER</div><div class="mut">Your word</div><div class="big">${esc(r.hint)}</div><div class="mut">${r.mates.length>1?'Only the imposters have this word':'Everyone else got a different word'}. Blend in.</div>`;
+    if(r.hint)h+=`<div class="sub imp">You are the IMPOSTER</div><div class="mut">Your word</div>${picBig(r.hint,V.settings.lang)}<div class="big">${esc(r.hint)}</div><div class="mut">${r.mates.length>1?'Only the imposters have this word':'Everyone else got a different word'}. Blend in.</div>`;
     else h+=`<div class="big imp">You are the IMPOSTER</div><div class="mut">You don't know the word. Blend in.</div>`;
     if(r.mates.length>1)h+=`<div class="mut">Fellow imposters: ${r.mates.filter(id=>id!==V.you).map(name).join(', ')}</div>`}
   if(r.cat)h+=`<div class="mut">Category: ${esc(r.cat)}</div>`;
@@ -503,7 +541,7 @@ function gameHTML(){
     <button class="ghost" data-a="home">Leave room</button>`;
   }
   const solo=off&&r.order.filter(id=>!isBot(id)).length<2,cover=off&&U.cover&&!solo;   // one human on the phone: nothing to hide from anyone
-  const board=off&&!hasBots?'':`<div class="card"><h2>Clues</h2><ul>${r.order.map(id=>`<li>${who(id,id===r.turnId?' 👈':'')}<span class="said">${(r.clues[id]||[]).map(esc).join(' · ')||'<span class="mut">…</span>'}</span></li>`).join('')}</ul></div>`;
+  const board=off&&!hasBots?'':`<div class="card"><h2>Clues</h2><ul>${r.order.map(id=>`<li>${who(id,id===r.turnId?' 👈':'')}<span class="said">${(r.clues[id]||[]).map(c=>picIn(c,S.lang)+esc(c)).join(' · ')||'<span class="mut">…</span>'}</span></li>`).join('')}</ul></div>`;
   const mine=off?'':roleCard(r,name);
   if(v.phase==='reveal'){
     if(off)return cover?pass(v.you,'Show my role'):roleCard(r,name)+`<button data-a="nextseat">${solo?'Start':'Hide and pass on'}</button>`;
@@ -512,8 +550,8 @@ function gameHTML(){
   if(v.phase==='clues'){
     const bot=isBot(r.turnId),my=!bot&&(off||r.turnId===v.you),say=r.say&&r.say.id===r.turnId?r.say.text:'';
     return mine+`<div class="card center"><div class="mut">Word ${esc(r.clueNo)} of ${esc(S.wpp)}</div>${face(r.turnId)}<div class="big">${name(r.turnId)}</div>
-    ${say?`<div class="mut">says</div><div class="big ok">${esc(say)}</div>`:`<div class="mut">${bot?'is thinking…':off?'say one clue word out loud':my?'your turn — say or type one clue word':'is giving a clue'}</div><div class="timer" id="tm"></div>`}
-    ${my?(off&&!hasBots?'':`<input id="clue" maxlength="30" placeholder="Type your clue word" autocomplete="off" enterkeyhint="send"><div class="mut" style="margin-top:8px">${hasBots?'AI players cannot hear you, so type your clue.':'Typing is optional. The referee checks typed clues at the end.'}</div>`)+`<button data-a="clue">Done — next player</button>`:''}</div>`+board;
+    ${say?`<div class="mut">says</div>${picBig(say,S.lang)}<div class="big ok">${esc(say)}</div>`:`<div class="mut">${bot?'is thinking…':off?'say one clue word out loud':my?'your turn — say or type one clue word':'is giving a clue'}</div><div class="timer" id="tm"></div>`}
+    ${my?(off&&!hasBots?'':`<input id="clue" maxlength="30" placeholder="Type your clue word" autocomplete="off" enterkeyhint="send"><div class="mut" style="margin-top:8px">${hasBots?'AI players cannot hear you, so type your clue. Its picture comes up for everyone.':'Typing is optional. A typed clue comes up with its picture, and the referee checks it at the end.'}</div>`)+`<button data-a="clue">Done — next player</button>`:''}</div>`+board;
   }
   if(v.phase==='discuss')return mine+`<div class="card center"><h2>Discuss — who is the imposter?</h2><div class="timer" id="tm"></div>${host?'<button data-a="go">Vote now</button>':''}</div>`+board;
   if(v.phase==='vote'){
@@ -527,7 +565,7 @@ function gameHTML(){
   }
   if(v.phase==='guess'){
     if(cover&&!isBot(r.guesser))return pass(r.guesser,'Guess the word','All imposters were caught! Last chance — pass the phone to');
-    if(r.opts)return `<div class="card"><h2 class="imp">${S.give==='secret'?'You were the imposter, and you were caught!':'You were caught!'}</h2><div class="mut">${hasTwin(S)?'Guess the word the others got to steal the win.':'Guess the secret word to steal the win.'}</div>${r.opts.map((w,i)=>`<button class="pick" data-a="guess" data-i="${i}">${esc(w)}</button>`).join('')}<div class="timer" id="tm"></div></div>`;
+    if(r.opts)return `<div class="card"><h2 class="imp">${S.give==='secret'?'You were the imposter, and you were caught!':'You were caught!'}</h2><div class="mut">${hasTwin(S)?'Guess the word the others got to steal the win.':'Guess the secret word to steal the win.'}</div>${r.opts.map((w,i)=>`<button class="pick" data-a="guess" data-i="${i}">${pic(w,S.lang)?`<span class="pg">${esc(pic(w,S.lang))}</span>`:''}<span>${esc(w)}</span></button>`).join('')}<div class="timer" id="tm"></div></div>`;
     return `<div class="card center"><h2>All imposters were caught!</h2>${face(r.guesser)}<div class="mut">${name(r.guesser)} gets one guess at the secret word…</div><div class="timer" id="tm"></div></div>`;
   }
   // result: the winner, then the referee's report (the word each player got, every clue checked against the secret word)
@@ -536,14 +574,14 @@ function gameHTML(){
   const chip=(id,c,i)=>{
     if(c==='—')return '<span class="chip u">no clue</span>';
     const said=c==='✓',auto=said||typeof BOT==='undefined'?'u':BOT.judge(c,S.lang,r.word)||'u',m=(marks[id]||{})[i]||auto;
-    const inner=`${said?'<span class="mut">said out loud</span>':esc(c)} <i>${SYM[m]}</i>`;
+    const inner=`${said?'<span class="mut">said out loud</span>':picIn(c,S.lang)+esc(c)} <i>${SYM[m]}</i>`;
     return host?`<button class="chip ${m}" data-a="mark" data-id="${esc(id)}" data-i="${i}" data-v="${m==='y'||m==='w'?'n':'y'}" title="${TIP[m]} — tap to change">${inner}</button>`:`<span class="chip ${m}" title="${TIP[m]}">${inner}</span>`;
   };
-  const got=id=>r.imps.includes(id)?`<b class="imp">${r.hintWord?esc(r.hintWord):'no word'}</b>`:`<b>${esc(r.word)}</b>`;
+  const got=id=>r.imps.includes(id)?`<b class="imp">${r.hintWord?picIn(r.hintWord,S.lang)+esc(r.hintWord):'no word'}</b>`:`<b>${picIn(r.word,S.lang)}${esc(r.word)}</b>`;
   return `<div class="card center role"><div class="big ${msg[2]}">${msg[0]}</div><div class="mut">${msg[1]}</div>
-  <div style="margin-top:12px">Secret word: <b>${esc(r.word)}</b> <span class="mut">(${esc(r.cat)})</span></div>
+  <div style="margin-top:12px">Secret word: <b>${picIn(r.word,S.lang)}${esc(r.word)}</b> <span class="mut">(${esc(r.cat)})</span></div>
   <div>Imposter${r.imps.length>1?'s':''}: <b class="imp">${r.imps.map(name).join(', ')}</b></div>
-  ${r.hintWord?`<div>The imposter${r.imps.length>1?'s’':'’s'} word: <b class="imp">${esc(r.hintWord)}</b></div>`:''}</div>
+  ${r.hintWord?`<div>The imposter${r.imps.length>1?'s’':'’s'} word: <b class="imp">${picIn(r.hintWord,S.lang)}${esc(r.hintWord)}</b></div>`:''}</div>
   <div class="card ref"><h2>🧑‍⚖️ Referee</h2><div class="mut">The word each player got, and whether each clue fits the secret word.</div>
   <ul style="margin-top:12px">${r.order.map(id=>`<li><div class="top">${who(id,r.imps.includes(id)?'<span class="tag imp">imposter</span>':'')}<span class="got">got ${got(id)}</span></div>
     <div>${(r.clues[id]||[]).map((c,i)=>chip(id,c,i)).join('')||'<span class="chip u">no clue</span>'}</div>
@@ -568,7 +606,7 @@ function render(){
   else{
     const ph=(G&&G.offline?G.phase:V.phase)+'|'+((G&&G.offline?G.round:V.round)||{}).order;
     if(ph!==lastPhase){lastPhase=ph;U={i:0,cover:true,sel:[],hide:false}}
-    if(G&&G.offline){V=viewFor(offSeat());vAt=Date.now();voice(V)}
+    if(G&&G.offline){V=viewFor(offSeat());vAt=Date.now();voice(V);clueNews(V)}
     h=gameHTML();
   }
   $('#main').innerHTML=h;
